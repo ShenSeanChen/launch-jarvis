@@ -18,13 +18,17 @@ zero frameworks hiding the interesting parts. Built for the
 ```bash
 git clone https://github.com/ShenSeanChen/launch-jarvis && cd launch-jarvis
 uv venv && uv pip install -e .          # or: pip install -e .
-cp .env.example .env                    # add your ANTHROPIC_API_KEY
+cp .env.example .env                    # pick a provider, paste ONE key
 make run                                # talk to your Jarvis
 ```
 
 Try: *"Remember that Alex prefers morning meetings."* Quit. Restart.
 *"Book a catch-up with Alex on Friday."* — it remembers, and it books 9am.
 Your calendar is `.jarvis/calendar.ics`; your memory is `.jarvis/state.db`.
+
+**Works with the model you already pay for**: Anthropic (default), OpenAI, Google
+Gemini, Kimi, or GLM — `JARVIS_PROVIDER=` one of them, paste that key, done.
+The loop speaks one dialect; a [~60-line adapter](jarvis/loop/models.py) covers the rest.
 
 ## How is this different from Claude Desktop / ChatGPT / Cowork?
 

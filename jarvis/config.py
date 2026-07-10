@@ -17,14 +17,15 @@ load_dotenv()  # reads .env in the current directory, if present
 
 @dataclass
 class Settings:
-    # --- LLM (any Anthropic-compatible endpoint works: Anthropic, Moonshot/Kimi, GLM, ...)
-    api_key: str = field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY", ""))
-    base_url: str | None = field(default_factory=lambda: os.getenv("ANTHROPIC_BASE_URL") or None)
-    model: str = field(default_factory=lambda: os.getenv("JARVIS_MODEL", "claude-sonnet-5"))
+    # --- LLM: pick a provider, set its key. See jarvis/loop/models.py PROVIDERS.
+    provider: str = field(default_factory=lambda: os.getenv("JARVIS_PROVIDER", "anthropic"))
+    # Explicit overrides (optional): key, endpoint, and model ids. Left empty,
+    # the provider's own key env var and default models are used.
+    api_key: str = field(default_factory=lambda: os.getenv("JARVIS_API_KEY", ""))
+    base_url: str | None = field(default_factory=lambda: os.getenv("JARVIS_BASE_URL") or None)
+    model: str = field(default_factory=lambda: os.getenv("JARVIS_MODEL", ""))
     # Cheap model used by the retrieval gate and the consolidation summarizer.
-    small_model: str = field(
-        default_factory=lambda: os.getenv("JARVIS_SMALL_MODEL", "claude-haiku-4-5-20251001")
-    )
+    small_model: str = field(default_factory=lambda: os.getenv("JARVIS_SMALL_MODEL", ""))
 
     # --- Home: where Jarvis keeps its state (memory DB, calendar, outbox, traces).
     # Defaults to ./.jarvis next to where you run it, so you can open every file

@@ -7,7 +7,8 @@ license = { text = "MIT" }
 authors = [{ name = "Sean Chen (ShenSeanChen)" }]
 requires-python = ">=3.11"
 dependencies = [
-    "anthropic>=0.40",
+    "anthropic>=0.40",   # anthropic wire format: Anthropic, Kimi, GLM
+    "openai>=1.50",      # openai wire format: OpenAI, Gemini (and embeddings)
     "python-dotenv>=1.0",
     "rich>=13.0",
 ]
@@ -31,7 +32,6 @@ telegram = [
 # Optional semantic-memory upgrade path: Supabase pgvector (see launch-rag)
 supabase = [
     "supabase>=2.0",
-    "openai>=1.50",
 ]
 dev = [
     "pytest>=8.0",

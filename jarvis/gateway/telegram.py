@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 
 from jarvis.app import Jarvis
+from jarvis.gateway.cli import _observer  # mirror gate/tool activity on the laptop terminal
 
 
 def main() -> None:
@@ -36,7 +37,9 @@ def main() -> None:
         if allowed and str(update.effective_user.id) != allowed:
             await update.message.reply_text("This Jarvis serves someone else. Run your own!")
             return
-        result = jarvis.respond(update.message.text)
+        print(f"you › {update.message.text}")
+        result = jarvis.respond(update.message.text, observer=_observer)
+        print(f"jarvis › {result.reply}")
         await update.message.reply_text(result.reply or "(no reply)")
 
     app = Application.builder().token(token).build()

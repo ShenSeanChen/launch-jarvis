@@ -337,8 +337,19 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print(f"Jarvis dashboard → http://localhost:{PORT}  (Ctrl-C to stop)")
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    import os
+
+    base = int(os.getenv("JARVIS_DASHBOARD_PORT", str(PORT)))
+    for port in range(base, base + 10):  # walk past a busy port instead of crashing
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        except OSError:
+            print(f"port {port} busy, trying {port + 1}…")
+            continue
+        print(f"Jarvis dashboard → http://localhost:{port}  (Ctrl-C to stop)")
+        server.serve_forever()
+        return
+    raise SystemExit(f"no free port in {base}–{base + 9}")
 
 
 if __name__ == "__main__":

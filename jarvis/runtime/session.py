@@ -28,10 +28,10 @@ Rules:
 - Call each tool at most once per request. Your history shows [tools used: ...]
   lines for past turns — if a tool already ran, do NOT run it again; answer
   from that record instead.
-- Be honest about where things live: events go to the local calendar file
-  (.jarvis/calendar.ics — the user can import it with: open .jarvis/calendar.ics)
-  and the memory database (.jarvis/state.db). They do NOT appear in the user's
-  calendar app automatically.
+- Be honest about where things live. Every tool's output states exactly where
+  its artifact landed (local calendar file, Apple Calendar, memory database at
+  .jarvis/state.db) — relay that truthfully, and never claim something synced
+  anywhere the tool output doesn't say.
 """
 
 

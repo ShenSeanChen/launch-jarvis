@@ -1,17 +1,27 @@
 """create_event — the flagship tool. "Did the meeting trigger?" is THE
 deterministic eval: it either wrote the right row or it didn't.
 
-Local-first by default: events land in state.db and .jarvis/calendar.ics
-(an ICS file any calendar app can import). A real Google Calendar adapter is a
-drop-in replacement for `_write_ics` + the DB insert — see docs/architecture.md.
+Where events land:
+  always      state.db (the eval asserts here) + calendar.ics (importable file)
+  opt-in      Apple Calendar, in a dedicated "Jarvis" calendar, via AppleScript —
+              set JARVIS_APPLE_CALENDAR=1. First use makes macOS ask permission
+              for your terminal to control Calendar; approve once.
+
+The tool's return string always says exactly where the event went — the model
+relays it, so Jarvis never over-claims what happened.
 """
 
 from __future__ import annotations
 
 import sqlite3
+import subprocess
+import sys
+from datetime import datetime
 from pathlib import Path
 
 from jarvis.tools.registry import Tool
+
+APPLE_CALENDAR_NAME = "Jarvis"
 
 
 def _write_ics(home: Path, title: str, start: str, end: str, attendees: str) -> None:
@@ -37,11 +47,61 @@ def _write_ics(home: Path, title: str, start: str, end: str, attendees: str) -> 
     ics_path.write_text(body + event + "END:VCALENDAR\n")
 
 
-def make_tool(conn: sqlite3.Connection, home: Path) -> Tool:
+def _applescript_date(var: str, iso: str) -> str:
+    """Build an AppleScript date from ISO parts — immune to system locale
+    (never feed AppleScript a formatted date string; parsing is locale-bound)."""
+    d = datetime.fromisoformat(iso)
+    # set day to 1 BEFORE month/year: prevents the classic AppleScript overflow
+    # (if today is the 31st, setting month to a 30-day month rolls into next month)
+    return (
+        f"set {var} to current date\nset day of {var} to 1\n"
+        f"set year of {var} to {d.year}\nset month of {var} to {d.month}\n"
+        f"set day of {var} to {d.day}\nset hours of {var} to {d.hour}\n"
+        f"set minutes of {var} to {d.minute}\nset seconds of {var} to 0\n"
+    )
+
+
+def sync_to_apple_calendar(title: str, start: str, end: str, notes: str = "") -> str:
+    """Create the event in Calendar.app under the 'Jarvis' calendar (created on
+    first use). Returns a short human-readable outcome for the tool output."""
+    if sys.platform != "darwin":
+        return "Apple Calendar sync skipped (not macOS)."
+    safe_title = title.replace("\\", "").replace('"', "'")
+    safe_notes = notes.replace("\\", "").replace('"', "'")
+    script = (
+        _applescript_date("startDate", start)
+        + _applescript_date("endDate", end)
+        + f'''
+tell application "Calendar"
+  if not (exists calendar "{APPLE_CALENDAR_NAME}") then
+    make new calendar with properties {{name:"{APPLE_CALENDAR_NAME}"}}
+  end if
+  tell calendar "{APPLE_CALENDAR_NAME}"
+    make new event with properties {{summary:"{safe_title}", start date:startDate, end date:endDate, description:"{safe_notes}"}}
+  end tell
+end tell'''
+    )
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script], capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"Apple Calendar sync FAILED ({exc}) — the event is still in the local calendar."
+    if result.returncode != 0:
+        detail = (result.stderr or "").strip()[:120]
+        return (
+            f"Apple Calendar sync FAILED ({detail}) — the event is still in the local "
+            "calendar. If this is a permissions error, allow your terminal to control "
+            "Calendar in System Settings > Privacy & Security > Automation."
+        )
+    return f"Also added to Apple Calendar (calendar '{APPLE_CALENDAR_NAME}')."
+
+
+def make_tool(conn: sqlite3.Connection, home: Path, apple_calendar: bool = False) -> Tool:
     def create_event(title: str, start: str, end: str = "", attendees: str = "", notes: str = "") -> str:
         if not end:
             # default: one hour
-            from datetime import datetime, timedelta
+            from datetime import timedelta
             end = (datetime.fromisoformat(start) + timedelta(hours=1)).isoformat(timespec="minutes")
 
         # idempotence guard: same title+start = same event. A confused model
@@ -52,10 +112,7 @@ def make_tool(conn: sqlite3.Connection, home: Path) -> Tool:
             "SELECT id FROM calendar_events WHERE title = ? AND start = ?", (title, start)
         ).fetchone()
         if existing:
-            return (
-                f"Event '{title}' at {start} already exists (not duplicated). "
-                f"It lives in {home / 'calendar.ics'} — import it with: open {home / 'calendar.ics'}"
-            )
+            return f"Event '{title}' at {start} already exists (not duplicated)."
 
         conn.execute(
             'INSERT INTO calendar_events (title, start, "end", attendees, notes) VALUES (?,?,?,?,?)',
@@ -63,10 +120,19 @@ def make_tool(conn: sqlite3.Connection, home: Path) -> Tool:
         )
         conn.commit()
         _write_ics(home, title, start, end, attendees)
+
+        where = f"Saved to the local calendar ({home / 'calendar.ics'})."
+        if apple_calendar:
+            where += " " + sync_to_apple_calendar(title, start, end, notes)
+        else:
+            where += (
+                " Not synced to any calendar app (enable with JARVIS_APPLE_CALENDAR=1, "
+                f"or import manually: open {home / 'calendar.ics'})."
+            )
         return (
             f"Event created: '{title}' {start} → {end}"
             + (f" with {attendees}" if attendees else "")
-            + f". Saved to {home / 'calendar.ics'} — import into the calendar app with: open {home / 'calendar.ics'}"
+            + f". {where}"
         )
 
     return Tool(

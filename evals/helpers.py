@@ -42,6 +42,8 @@ def make_jarvis(home: Path, client=None, **settings_overrides):
     from jarvis.app import Jarvis
     from jarvis.config import Settings
 
+    # evals must NEVER touch the real Apple Calendar, whatever .env says
+    settings_overrides.setdefault("apple_calendar", False)
     settings = Settings(home=home, **settings_overrides)
     if client is not None and not settings.api_key:
         settings.api_key = "offline"  # never read the real key for scripted runs

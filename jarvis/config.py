@@ -43,6 +43,13 @@ class Settings:
     # 'sqlite' (default, zero setup) or 'supabase' (pgvector upgrade path — see launch-rag).
     semantic_store: str = field(default_factory=lambda: os.getenv("JARVIS_SEMANTIC_STORE", "sqlite"))
 
+    # --- Tools
+    # Sync created events into Apple Calendar (a dedicated "Jarvis" calendar)
+    # via AppleScript. Opt-in because it writes to your real calendar app.
+    apple_calendar: bool = field(
+        default_factory=lambda: os.getenv("JARVIS_APPLE_CALENDAR", "") in ("1", "true", "yes")
+    )
+
     # --- Optional gateway
     telegram_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))
 

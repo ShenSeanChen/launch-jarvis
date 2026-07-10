@@ -1,0 +1,285 @@
+<title>launch-jarvis — architecture</title>
+<style>
+  :root{
+    --canvas:#fbfaf7; --ink:#1f1e1c; --muted:#6b6863; --paper:#ffffff;
+    --red:#e03131; --red-soft:#ffe9e9; --orange:#e8850a; --orange-soft:#fff2df;
+    --blue:#1971c2; --blue-soft:#e7f0fb; --green:#2f9e44; --green-soft:#c5f0cf;
+    --pink:#ff8787; --pink-soft:#ffd4d4; --grey:#9aa0a6; --grey-soft:#e9ecef;
+    --hero:#8a3ffc; --hero-soft:#efe4ff;
+  }
+  :root[data-theme="dark"], :root:not([data-theme]) { }
+  @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+    --canvas:#161719; --ink:#e9e7e3; --muted:#9a968f; --paper:#212225;
+    --red:#ff6b6b; --red-soft:#3a1f22; --orange:#ffa94d; --orange-soft:#3a2a15;
+    --blue:#74b3f0; --blue-soft:#16283c; --green:#69db7c; --green-soft:#14331d;
+    --pink:#ff9b9b; --pink-soft:#3a2226; --grey:#8b9096; --grey-soft:#2a2c2f;
+    --hero:#c29bff; --hero-soft:#2a1f3d;
+  }}
+  :root[data-theme="dark"]{
+    --canvas:#161719; --ink:#e9e7e3; --muted:#9a968f; --paper:#212225;
+    --red:#ff6b6b; --red-soft:#3a1f22; --orange:#ffa94d; --orange-soft:#3a2a15;
+    --blue:#74b3f0; --blue-soft:#16283c; --green:#69db7c; --green-soft:#14331d;
+    --pink:#ff9b9b; --pink-soft:#3a2226; --grey:#8b9096; --grey-soft:#2a2c2f;
+    --hero:#c29bff; --hero-soft:#2a1f3d;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--canvas);color:var(--ink);
+       font-family:'Inter',-apple-system,system-ui,sans-serif;
+       padding:28px 20px 40px;-webkit-font-smoothing:antialiased}
+  .hand{font-family:'Comic Sans MS','Chalkboard SE','Bradley Hand','Segoe Print',cursive}
+  header{max-width:1300px;margin:0 auto 18px;padding:0 6px}
+  h1{font-size:30px;font-weight:800;letter-spacing:-.02em}
+  h1 .hl{color:var(--red)}
+  .tag{color:var(--muted);font-size:15px;margin-top:4px}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;font-size:13px;color:var(--muted)}
+  .legend b{display:inline-flex;align-items:center;gap:7px;font-weight:500;color:var(--ink)}
+  .sw{width:13px;height:13px;border-radius:3px;border:2px solid}
+  .frame{max-width:1300px;margin:0 auto;overflow-x:auto;
+         border:1px solid color-mix(in srgb,var(--ink) 12%,transparent);
+         border-radius:14px;background:var(--canvas);padding:6px}
+  svg{width:100%;min-width:1120px;height:auto;display:block}
+  svg text{font-family:'Comic Sans MS','Chalkboard SE','Bradley Hand','Segoe Print',cursive}
+  .cap{max-width:1300px;margin:22px auto 0;display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .hero-card{border:2px solid var(--hero);background:var(--hero-soft);border-radius:12px;padding:16px 18px}
+  .hero-card h3{font-size:15px;color:var(--hero);display:flex;align-items:center;gap:8px}
+  .hero-card p{font-size:13.5px;color:var(--ink);margin-top:6px;line-height:1.5}
+  .star{font-family:sans-serif}
+  footer{max-width:1300px;margin:26px auto 0;padding:0 6px;color:var(--muted);font-size:13px}
+  footer a{color:var(--blue);text-decoration:none}
+  @media (max-width:720px){.cap{grid-template-columns:1fr}h1{font-size:24px}}
+</style>
+
+<header>
+  <h1><span class="hl">launch-jarvis</span> &mdash; the readable Jarvis</h1>
+  <p class="tag">Your own personal assistant, on your own laptop. The whole system in one picture: <b>Harness &middot; Loop &middot; Memory &middot; Eval</b>.</p>
+  <div class="legend">
+    <b><span class="sw" style="border-color:var(--red)"></span>Harness (your machine)</b>
+    <b><span class="sw" style="border-color:var(--orange)"></span>The Loop</b>
+    <b><span class="sw" style="border-color:var(--blue)"></span>LLM Ops (improves the agent)</b>
+    <b><span class="sw" style="border-color:var(--hero)"></span>Hero moment</b>
+  </div>
+</header>
+
+<div class="frame">
+<svg viewBox="0 0 1300 860" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="rough" x="-2%" y="-2%" width="104%" height="104%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.014" numOctaves="2" seed="7" result="n"/>
+      <feDisplacementMap in="SourceGraphic" in2="n" scale="3.2"/>
+    </filter>
+    <marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 1 L9 5 L0 9" fill="none" stroke="var(--ink)" stroke-width="1.6"/>
+    </marker>
+    <marker id="ahr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 1 L9 5 L0 9" fill="none" stroke="var(--red)" stroke-width="1.6"/>
+    </marker>
+  </defs>
+
+  <!-- ============ STROKES / FILLS (roughened) ============ -->
+  <g filter="url(#rough)" stroke-linecap="round" stroke-linejoin="round">
+    <!-- HARNESS container -->
+    <rect x="16" y="20" width="848" height="824" rx="16" fill="none" stroke="var(--red)" stroke-width="3"/>
+
+    <!-- Gateway Interface -->
+    <rect x="40" y="92" width="300" height="86" rx="10" fill="var(--paper)" stroke="var(--ink)" stroke-width="2"/>
+    <rect x="56" y="132" width="58" height="30" rx="6" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.6"/>
+    <rect x="122" y="132" width="66" height="30" rx="6" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.6"/>
+    <rect x="196" y="132" width="80" height="30" rx="6" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.6"/>
+    <rect x="284" y="132" width="44" height="30" rx="6" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.6"/>
+
+    <!-- Ephemeral run inner container -->
+    <rect x="40" y="226" width="500" height="132" rx="12" fill="none" stroke="var(--ink)" stroke-width="1.6"/>
+    <rect x="58" y="244" width="150" height="30" rx="6" fill="var(--green-soft)" stroke="var(--green)" stroke-width="1.6"/>
+    <rect x="58" y="284" width="176" height="28" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1.6"/>
+    <rect x="58" y="320" width="150" height="28" rx="6" fill="var(--paper)" stroke="var(--ink)" stroke-width="1.6"/>
+    <rect x="300" y="266" width="128" height="66" rx="10" fill="var(--paper)" stroke="var(--ink)" stroke-width="2"/>
+
+    <!-- LOOP container -->
+    <rect x="420" y="96" width="416" height="248" rx="14" fill="none" stroke="var(--orange)" stroke-width="3"/>
+    <!-- agentic tools -->
+    <rect x="600" y="120" width="216" height="104" rx="10" fill="var(--paper)" stroke="var(--ink)" stroke-width="2"/>
+    <!-- llm agent ellipse -->
+    <ellipse cx="520" cy="270" rx="92" ry="40" fill="var(--pink-soft)" stroke="var(--pink)" stroke-width="2.4"/>
+    <!-- reply -->
+    <rect x="754" y="250" width="72" height="42" rx="8" fill="var(--green-soft)" stroke="var(--green)" stroke-width="2"/>
+
+    <!-- retrieval gate diamond (HERO 1) -->
+    <path d="M300 388 L392 430 L300 472 L208 430 Z" fill="var(--hero-soft)" stroke="var(--hero)" stroke-width="2.6"/>
+
+    <!-- three memory stores -->
+    <rect x="40" y="516" width="224" height="104" rx="12" fill="var(--paper)" stroke="var(--ink)" stroke-width="2"/>
+    <rect x="300" y="516" width="224" height="104" rx="12" fill="var(--paper)" stroke="var(--ink)" stroke-width="2"/>
+    <rect x="560" y="516" width="224" height="104" rx="12" fill="var(--paper)" stroke="var(--ink)" stroke-width="2"/>
+
+    <!-- state.db cylinder -->
+    <g fill="var(--grey-soft)" stroke="var(--ink)" stroke-width="1.8">
+      <ellipse cx="690" cy="676" rx="44" ry="12"/>
+      <path d="M646 676 v40 a44 12 0 0 0 88 0 v-40" fill="var(--grey-soft)"/>
+      <ellipse cx="690" cy="716" rx="44" ry="12" fill="none"/>
+    </g>
+
+    <!-- consolidation diamond + summarizer -->
+    <path d="M470 690 L590 734 L470 778 L350 734 Z" fill="var(--paper)" stroke="var(--ink)" stroke-width="2"/>
+    <ellipse cx="230" cy="740" rx="104" ry="40" fill="var(--pink-soft)" stroke="var(--pink)" stroke-width="2.4"/>
+
+    <!-- ============ LLM OPS container ============ -->
+    <rect x="900" y="40" width="384" height="784" rx="16" fill="none" stroke="var(--blue)" stroke-width="3"/>
+    <rect x="928" y="118" width="330" height="64" rx="10" fill="var(--paper)" stroke="var(--ink)" stroke-width="2"/>
+    <!-- eval: two side by side (HERO 2) -->
+    <rect x="922" y="216" width="176" height="92" rx="10" fill="var(--hero-soft)" stroke="var(--hero)" stroke-width="2.4"/>
+    <rect x="1104" y="216" width="164" height="92" rx="10" fill="var(--hero-soft)" stroke="var(--hero)" stroke-width="2.4"/>
+    <rect x="928" y="346" width="330" height="58" rx="10" fill="var(--paper)" stroke="var(--ink)" stroke-width="2"/>
+    <!-- gate diamond -->
+    <path d="M1092 440 L1170 476 L1092 512 L1014 476 Z" fill="var(--paper)" stroke="var(--ink)" stroke-width="2"/>
+    <!-- release -->
+    <rect x="946" y="560" width="292" height="86" rx="10" fill="var(--paper)" stroke="var(--ink)" stroke-width="2"/>
+
+    <!-- ============ ARROWS ============ -->
+    <g fill="none" stroke="var(--ink)" stroke-width="1.7" marker-end="url(#ah)">
+      <!-- inputs -> working memory -->
+      <path d="M208 259 C250 262 270 285 298 292"/>
+      <path d="M234 298 L298 298"/>
+      <path d="M208 334 C250 330 270 316 298 306"/>
+      <!-- working memory -> llm agent -->
+      <path d="M428 300 C455 300 470 282 480 276"/>
+      <!-- llm <-> tools -->
+      <path d="M560 240 C610 205 640 200 660 224"/>
+      <path d="M712 224 C700 250 680 258 612 268"/>
+      <!-- llm -> reply (end loop) -->
+      <path d="M612 276 C680 280 720 274 752 272"/>
+      <!-- reply -> save to db -->
+      <path d="M790 292 C800 420 740 560 700 662"/>
+      <!-- gate -> working memory (dashed, only if needed) -->
+      <path d="M300 388 L346 340" stroke-dasharray="6 4"/>
+      <!-- stores -> gate -->
+      <path d="M180 516 C220 490 270 470 288 456"/>
+      <path d="M360 516 C340 500 322 486 306 470" stroke-dasharray="6 4"/>
+      <path d="M600 516 C480 496 360 470 318 452" stroke-dasharray="6 4"/>
+      <!-- db -> consolidation diamond -->
+      <path d="M648 706 C600 720 560 728 532 732"/>
+      <!-- diamond -> summarizer -->
+      <path d="M350 734 L338 736"/>
+      <!-- summarizer -> distill into stores -->
+      <path d="M210 700 C180 640 250 600 300 622"/>
+      <path d="M240 702 C300 630 420 600 470 622"/>
+    </g>
+
+    <!-- LLM Ops arrows -->
+    <g fill="none" stroke="var(--ink)" stroke-width="1.7" marker-end="url(#ah)">
+      <path d="M826 268 C868 260 895 210 926 176"/>            <!-- reply -> trace -->
+      <path d="M1010 182 C1010 196 1010 202 1010 214"/>        <!-- trace -> eval L -->
+      <path d="M1186 182 C1186 196 1186 202 1186 214"/>        <!-- trace -> eval R -->
+      <path d="M1010 308 C1030 322 1050 330 1080 344"/>        <!-- evalL -> diagnose -->
+      <path d="M1186 308 C1160 322 1140 330 1108 344"/>        <!-- evalR -> diagnose -->
+      <path d="M1093 404 L1093 438"/>                          <!-- diagnose -> gate -->
+      <path d="M1092 512 C1092 534 1092 544 1092 558"/>        <!-- gate -> release (pass) -->
+    </g>
+    <!-- feedback: release -> harness (improved prompt) -->
+    <path d="M946 600 C700 560 700 360 838 300" fill="none" stroke="var(--blue)" stroke-width="1.8" stroke-dasharray="7 5" marker-end="url(#ah)"/>
+    <!-- eval-not-passed loop back to trace -->
+    <path d="M1014 476 C960 470 950 300 990 190" fill="none" stroke="var(--ink)" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+  </g>
+
+  <!-- ============ TEXT (crisp, on top) ============ -->
+  <g fill="var(--ink)">
+    <!-- Harness title -->
+    <text x="40" y="58" font-size="30" font-weight="700" fill="var(--red)">Harness</text>
+    <text x="40" y="80" font-size="14" fill="var(--red)">runs on your laptop &mdash; your data never leaves</text>
+
+    <!-- gateway -->
+    <text x="52" y="118" font-size="15" font-weight="700" fill="var(--green)">Gateway Interface</text>
+    <text x="85" y="152" font-size="13" text-anchor="middle">CLI</text>
+    <text x="155" y="152" font-size="13" text-anchor="middle">Voice</text>
+    <text x="236" y="152" font-size="12" text-anchor="middle">Telegram</text>
+    <text x="306" y="152" font-size="13" text-anchor="middle">Web</text>
+
+    <!-- ephemeral run -->
+    <text x="48" y="216" font-size="15" font-weight="700">Ephemeral Agent Run &mdash; rebuilt every turn</text>
+    <text x="133" y="264" font-size="13" text-anchor="middle">User message</text>
+    <text x="146" y="302" font-size="12.5" text-anchor="middle">System prompt</text>
+    <text x="133" y="338" font-size="12.5" text-anchor="middle">Chat history</text>
+    <text x="364" y="296" font-size="13" text-anchor="middle" font-weight="600">Working</text>
+    <text x="364" y="313" font-size="13" text-anchor="middle" font-weight="600">Memory</text>
+
+    <!-- loop -->
+    <text x="436" y="130" font-size="26" font-weight="700" fill="var(--orange)">Loop</text>
+    <text x="708" y="142" font-size="13.5" text-anchor="middle" font-weight="700">Agentic Tools</text>
+    <text x="708" y="164" font-size="12" text-anchor="middle">create_event</text>
+    <text x="708" y="182" font-size="12" text-anchor="middle">save_note</text>
+    <text x="708" y="200" font-size="12" text-anchor="middle">send_message</text>
+    <text x="520" y="266" font-size="13.5" text-anchor="middle" font-weight="700">LLM agent</text>
+    <text x="520" y="284" font-size="11.5" text-anchor="middle">5 providers</text>
+    <text x="576" y="216" font-size="11.5" text-anchor="middle" fill="var(--muted)">tool calls</text>
+    <text x="688" y="238" font-size="11.5" text-anchor="middle" fill="var(--muted)">result</text>
+    <text x="790" y="276" font-size="13" text-anchor="middle" font-weight="600">Reply</text>
+    <text x="700" y="262" font-size="11" text-anchor="middle" fill="var(--muted)">end-loop guardrails</text>
+
+    <!-- retrieval gate -->
+    <text x="300" y="426" font-size="12.5" text-anchor="middle" font-weight="700" fill="var(--hero)">Retrieval</text>
+    <text x="300" y="442" font-size="12.5" text-anchor="middle" font-weight="700" fill="var(--hero)">Gate</text>
+    <text x="352" y="360" font-size="11" fill="var(--muted)">only if needed</text>
+
+    <!-- memory stores -->
+    <text x="152" y="546" font-size="14" text-anchor="middle" font-weight="700">Procedural</text>
+    <text x="152" y="566" font-size="12" text-anchor="middle">how to act &middot; SKILL.md</text>
+    <text x="152" y="600" font-size="11" text-anchor="middle" fill="var(--red)">~/.jarvis/skills/</text>
+
+    <text x="412" y="546" font-size="14" text-anchor="middle" font-weight="700">Semantic</text>
+    <text x="412" y="566" font-size="12" text-anchor="middle">durable facts &middot; profile</text>
+    <text x="412" y="600" font-size="11" text-anchor="middle" fill="var(--red)">SQLite FTS5 &middot; keyword top-k</text>
+
+    <text x="672" y="546" font-size="14" text-anchor="middle" font-weight="700">Episodic</text>
+    <text x="672" y="566" font-size="12" text-anchor="middle">dated events &middot; past chats</text>
+    <text x="672" y="600" font-size="11" text-anchor="middle" fill="var(--muted)">relevance + recency</text>
+
+    <text x="300" y="500" font-size="11" text-anchor="middle" fill="var(--muted)">keyword top-k, no embedding</text>
+
+    <!-- consolidation -->
+    <text x="690" y="640" font-size="11.5" text-anchor="middle" fill="var(--red)">state.db (SQLite + FTS5)</text>
+    <text x="815" y="470" font-size="11.5" text-anchor="middle" fill="var(--muted)" transform="rotate(78 815 470)">save messages</text>
+    <text x="470" y="732" font-size="12" text-anchor="middle">consolidate after</text>
+    <text x="470" y="748" font-size="12" text-anchor="middle">N new chats?</text>
+    <text x="230" y="736" font-size="12.5" text-anchor="middle" font-weight="700">Summarizer</text>
+    <text x="230" y="753" font-size="11.5" text-anchor="middle">cheap model</text>
+    <text x="300" y="648" font-size="11" text-anchor="middle" fill="var(--muted)">distill into facts</text>
+
+    <!-- LLM OPS -->
+    <text x="928" y="78" font-size="26" font-weight="700" fill="var(--blue)">LLM Ops</text>
+    <text x="928" y="98" font-size="13" fill="var(--muted)">not the agent &mdash; the loop that improves it</text>
+    <text x="1093" y="146" font-size="14" text-anchor="middle" font-weight="700">Trace</text>
+    <text x="1093" y="166" font-size="11.5" text-anchor="middle">JSONL + OTel &rarr; Phoenix &middot; 1 per run</text>
+    <text x="1010" y="252" font-size="12.5" text-anchor="middle" font-weight="700" fill="var(--hero)">Deterministic</text>
+    <text x="1010" y="270" font-size="11.5" text-anchor="middle">did the tool fire?</text>
+    <text x="1010" y="292" font-size="13" text-anchor="middle" font-weight="700">0 / 1</text>
+    <text x="1186" y="252" font-size="12.5" text-anchor="middle" font-weight="700" fill="var(--hero)">LLM-as-judge</text>
+    <text x="1186" y="270" font-size="11.5" text-anchor="middle">was it good?</text>
+    <text x="1186" y="292" font-size="13" text-anchor="middle" font-weight="700">score %</text>
+    <text x="1093" y="371" font-size="13.5" text-anchor="middle" font-weight="700">Observe &amp; Diagnose</text>
+    <text x="1093" y="390" font-size="11.5" text-anchor="middle">tokens &middot; latency &middot; cost &middot; where it broke</text>
+    <text x="1092" y="481" font-size="12.5" text-anchor="middle" font-weight="700">Gate</text>
+    <text x="1200" y="482" font-size="11" text-anchor="middle" fill="var(--muted)">pass</text>
+    <text x="948" y="476" font-size="11" text-anchor="middle" fill="var(--muted)">fail: fix &amp; re-run</text>
+    <text x="1092" y="596" font-size="14" text-anchor="middle" font-weight="700">Release</text>
+    <text x="1092" y="616" font-size="11.5" text-anchor="middle">ship safely: new prompt version,</text>
+    <text x="1092" y="632" font-size="11.5" text-anchor="middle">model, tool, or RAG top-k</text>
+    <text x="712" y="384" font-size="11.5" text-anchor="middle" fill="var(--blue)" transform="rotate(-24 712 384)">improved prompt + config</text>
+  </g>
+</svg>
+</div>
+
+<div class="cap">
+  <div class="hero-card">
+    <h3><span class="star">&#9733;</span> Hero moment 1 &mdash; the retrieval gate</h3>
+    <p>Most assistants hit their memory on <em>every</em> turn &mdash; slow, and worse, irrelevant memories bias the answer. Here a cheap model first decides <em>does this turn even need memory?</em> &ldquo;what&rsquo;s 2+2&rdquo; &rarr; skip. &ldquo;when am I meeting Alex?&rdquo; &rarr; retrieve. Latency and bias, saved.</p>
+  </div>
+  <div class="hero-card">
+    <h3><span class="star">&#9733;</span> Hero moment 2 &mdash; two kinds of eval</h3>
+    <p><em>&ldquo;Did the right tool fire?&rdquo;</em> is a unit test &mdash; 0 or 1, no model judges it. <em>&ldquo;Was the reply good?&rdquo;</em> is an LLM-as-judge score with a threshold. Teams constantly conflate them; here they&rsquo;re separate suites, and the release gate needs both.</p>
+  </div>
+</div>
+
+<footer>
+  <p>Every box maps to one small module you can read in an afternoon &mdash;
+  <a href="https://github.com/ShenSeanChen/launch-jarvis">github.com/ShenSeanChen/launch-jarvis</a>.
+  Built for <a href="https://www.youtube.com/@SeanAIStories">Sean&rsquo;s AI Stories</a>.</p>
+</footer>

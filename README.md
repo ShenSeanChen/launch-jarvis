@@ -25,15 +25,23 @@ zero frameworks hiding the interesting parts. Built for the
 
 ```bash
 git clone https://github.com/ShenSeanChen/waku-agent && cd waku-agent
-uv venv && source .venv/bin/activate    # create the env AND activate it (so `waku` is on PATH)
-uv pip install -e .                     # installs the `waku` command
+uv venv && uv pip install -e .          # create the env + install the `waku` command
 cp .env.example .env                    # pick a provider, paste ONE key
-waku                                    # talk to your Waku in the terminal
-waku dashboard                          # …or the browser cockpit → localhost:7777
+uv run waku                             # talk to your Waku in the terminal
+uv run waku dashboard                   # …or the browser cockpit → localhost:7777
 ```
 
-> If you see `waku: command not found`, the venv isn't active — run `source .venv/bin/activate`
-> (or use `uv run waku dashboard`). `make dashboard` always works without activating.
+`uv run waku …` needs **no venv activation** — uv runs it in the project env for you. Three ways
+to run it, pick what you like:
+
+| Command | Notes |
+|---|---|
+| `uv run waku dashboard` | zero setup, no activation (recommended) |
+| `source .venv/bin/activate` then `waku dashboard` | activate once, then bare `waku` works all session |
+| `uv tool install .` then `waku dashboard` | install it **globally** — `waku` works in any terminal, forever |
+
+(`make dashboard` also works.) A bare `waku` only fails with `command not found` when the venv
+isn't on your PATH — that's inherent to Python virtualenvs, hence the options above.
 
 `waku` and `waku dashboard` are two doorways into the **same** local Waku (same
 `state.db`, same loop). `waku dashboard` starts a tiny web server on **your** machine; when

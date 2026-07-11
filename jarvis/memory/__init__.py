@@ -61,10 +61,58 @@ class Memory:
         return "\n\n".join(f"### {s.name}\n{s.body}" for s in matched)
 
     # ---- write paths
-    def log_chat(self, user_message: str, reply: str) -> None:
-        self.conn.execute("INSERT INTO chat_log (role, content) VALUES ('user', ?)", (user_message,))
-        self.conn.execute("INSERT INTO chat_log (role, content) VALUES ('assistant', ?)", (reply,))
+    def log_chat(self, user_message: str, reply: str, session_id: str = "default") -> None:
+        self.conn.execute(
+            "INSERT INTO chat_log (role, content, session_id) VALUES ('user', ?, ?)",
+            (user_message, session_id),
+        )
+        self.conn.execute(
+            "INSERT INTO chat_log (role, content, session_id) VALUES ('assistant', ?, ?)",
+            (reply, session_id),
+        )
         self.conn.commit()
+
+    # ---- sessions (for the dashboard's chat history + "New chat")
+    def session_history(self, session_id: str) -> list[tuple[str, str]]:
+        """The (user, assistant) exchanges of one past session, in order — used
+        to reload working memory when the user switches back to a conversation."""
+        rows = self.conn.execute(
+            "SELECT role, content FROM chat_log WHERE session_id = ? ORDER BY id",
+            (session_id,),
+        ).fetchall()
+        pairs, pending = [], None
+        for r in rows:
+            if r["role"] == "user":
+                pending = r["content"]
+            elif pending is not None:
+                pairs.append((pending, r["content"]))
+                pending = None
+        return pairs
+
+    def list_sessions(self) -> list[dict]:
+        """One row per conversation: id, first user message (the title), message
+        count, and when it started — newest first."""
+        rows = self.conn.execute(
+            """SELECT session_id,
+                      COUNT(*) AS messages,
+                      MIN(created_at) AS started_at,
+                      MAX(created_at) AS last_at
+               FROM chat_log GROUP BY session_id ORDER BY last_at DESC"""
+        ).fetchall()
+        out = []
+        for r in rows:
+            first = self.conn.execute(
+                "SELECT content FROM chat_log WHERE session_id = ? AND role = 'user' ORDER BY id LIMIT 1",
+                (r["session_id"],),
+            ).fetchone()
+            out.append({
+                "id": r["session_id"],
+                "title": (first["content"][:60] if first else "(empty)"),
+                "messages": r["messages"],
+                "started_at": r["started_at"],
+                "last_at": r["last_at"],
+            })
+        return out
 
     def maybe_consolidate(self, notify=None) -> None:
         new_facts = consolidation.consolidate_if_due(

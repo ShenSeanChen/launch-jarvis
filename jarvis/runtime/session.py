@@ -20,7 +20,9 @@ You are concise, warm, and proactive. You remember what your user tells you.
 
 Rules:
 - When the user wants to schedule something, use create_event. Resolve relative
-  dates ("next Tuesday") to ISO timestamps yourself; today's date is given below.
+  dates and times ("next Tuesday", "in 30 minutes") to ISO timestamps yourself;
+  the current date and time are given below — trust them, never ask the user
+  what time it is.
 - When the user shares something durable about a person, project, or preference,
   use save_note to remember it.
 - When asked to message someone, use send_message (it drafts to a local outbox).
@@ -51,15 +53,20 @@ class Session:
     """Holds one conversation: the chat history plus the recipe for the
     system prompt. One Session per gateway connection."""
 
-    def __init__(self, settings: Settings, memory=None):
+    def __init__(self, settings: Settings, memory=None, session_id: str = "default"):
         self.settings = settings
         self.memory = memory  # jarvis.memory.Memory (None until Phase-2 wiring)
+        self.session_id = session_id
         self.history: list[dict] = []
 
     def build_system(self, user_message: str, notify=None) -> str:
-        from datetime import date
+        from datetime import datetime
 
-        parts = [load_soul(self.settings), f"\nToday's date: {date.today().isoformat()}"]
+        # The agent runs on your laptop, so it should know your laptop's clock.
+        # Local time WITH the timezone name — enough to resolve "in 30 minutes".
+        now = datetime.now().astimezone()
+        parts = [load_soul(self.settings),
+                 f"\nRight now it is {now:%A, %Y-%m-%d %H:%M} ({now:%Z}, UTC{now:%z})."]
 
         if self.memory is not None:
             # Hero moment #1: a cheap judge decides IF we retrieve at all —
@@ -89,4 +96,21 @@ class Session:
         self.history.append({"role": "user", "content": user_message})
         self.history.append({"role": "assistant", "content": record})
         if self.memory is not None:
-            self.memory.log_chat(user_message, record)
+            self.memory.log_chat(user_message, record, session_id=self.session_id)
+
+    # ---- session lifecycle (the "New chat" / history feature)
+    # A session is just a tag on chat_log rows. Starting a new one clears working
+    # memory; switching reloads a past conversation's history so replies have
+    # context. Consolidation still reads ALL unconsolidated rows regardless.
+    def start_new(self, session_id: str) -> None:
+        self.session_id = session_id
+        self.history = []
+
+    def switch(self, session_id: str) -> None:
+        self.session_id = session_id
+        self.history = []
+        if self.memory is None:
+            return
+        for user_msg, reply in self.memory.session_history(session_id):
+            self.history.append({"role": "user", "content": user_msg})
+            self.history.append({"role": "assistant", "content": reply})

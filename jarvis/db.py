@@ -62,14 +62,27 @@ CREATE TRIGGER IF NOT EXISTS episodes_ad AFTER DELETE ON episodes BEGIN
 END;
 
 -- Raw chat log ("save the messages" box). Consolidation reads from here.
+-- session_id tags each row with which conversation it belongs to, so the
+-- dashboard can offer "New chat" and switch between past sessions (like a
+-- chat app). Everything shares this one table — sessions are just a label.
 CREATE TABLE IF NOT EXISTS chat_log (
     id INTEGER PRIMARY KEY,
     role TEXT NOT NULL,            -- 'user' | 'assistant'
     content TEXT NOT NULL,
     consolidated INTEGER DEFAULT 0,
+    session_id TEXT DEFAULT 'default',
     created_at TEXT DEFAULT (datetime('now'))
 );
 """
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Additive, idempotent column upgrades for databases created before a
+    column existed. SQLite has no 'ADD COLUMN IF NOT EXISTS', so we check."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(chat_log)").fetchall()}
+    if "session_id" not in cols:
+        conn.execute("ALTER TABLE chat_log ADD COLUMN session_id TEXT DEFAULT 'default'")
+        conn.commit()
 
 
 def connect(home: Path, check_same_thread: bool = True) -> sqlite3.Connection:
@@ -80,4 +93,5 @@ def connect(home: Path, check_same_thread: bool = True) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=3000")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn

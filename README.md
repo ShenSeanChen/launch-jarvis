@@ -47,14 +47,14 @@ Every tab is a window into one pillar, and each links straight to the real local
 
 | Tab | What you see |
 |---|---|
-| **Chat & watch** | the live animated diagram + a chat box — type and watch the flow |
+| **Chat & watch** | the live animated diagram + a chat box, with *New chat* + history — type and watch the flow |
 | **Overview** | cost, latency, the gate skip/retrieve split, the clickable architecture map |
 | **Sessions** | the full conversation history across every gateway |
 | **Loop** | every turn with its gate decision, tool calls, tokens, and cost |
-| **Memory** | semantic facts, episodes, loaded skills — with *reveal in Finder* links |
-| **Tools** | calendar events and drafted messages |
-| **state.db** | a live SQLite browser: every table, schema, and row in your one memory file |
-| **Ops** | eval verdict, slowest turns, tokens, and the JSONL traces |
+| **Memory** | sub-tabs per pillar — semantic facts, episodes, editable skills + SOUL, consolidation |
+| **Tools** | the agent's available tools (grouped by origin), its results, and MCP connectors |
+| **Data** | a live SQLite browser: per-table tabs, schema, and a read-only SQL console over `state.db` |
+| **Ops** | eval verdict + history, the gate decisions, slowest turns, and inline JSONL traces |
 
 ## How is this different from Claude Desktop / ChatGPT / Cowork?
 
@@ -182,12 +182,21 @@ pip install -e '.[mcp]'
 ```
 
 Create `.jarvis/mcp.json` and any Model Context Protocol server's tools appear to
-the agent, namespaced `<server>_<tool>`:
+the agent, namespaced `<server>_<tool>` (and in the dashboard's Tools ▸ MCP tab):
 
 ```json
 {"servers": [{"name": "fs", "command": "npx",
   "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]}]}
 ```
+
+**Node-free demo** — a tiny self-contained Python MCP server ships in the repo:
+
+```bash
+cp examples/mcp.demo.json .jarvis/mcp.json   # points at examples/mcp_demo_server.py
+make dashboard                               # demo_word_count / demo_reverse_text appear in Tools
+```
+
+Same pattern scales to any server, yours or a vendor's — no changes to Jarvis's code.
 
 ## Add skills — yours or the community's
 

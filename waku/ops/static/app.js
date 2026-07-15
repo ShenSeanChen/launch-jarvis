@@ -133,36 +133,100 @@ async function loadModelList(){
   } else {
     msg.textContent = modelCatalog.error ? `model list unavailable: ${modelCatalog.error}` : "";
   }
-  renderFreeModels();
+  renderCatalog();
 }
 
-// The $0 catalog as one-click switch rows (shown only when the endpoint
-// reports free models, i.e. OpenRouter). Tool-less models still work for
-// plain chat but can't run Waku's calendar/notes/search tools, so they're
-// labelled. "gate" sets the small model instead (pick an instruct model
-// there: reasoning models talk past the gate's tiny token budget).
-function renderFreeModels(){
-  const box = document.getElementById("free-models");
+// The catalog browser (shown when the endpoint lists models, i.e. OpenRouter):
+// suggested picks per SLOT, a search + free/tools filter, and the full list
+// grouped by vendor. Every row can go to either slot: "use" is the loop model
+// (needs tool calling), "gate" is the small model (needs terse JSON, so
+// reasoning models are steered away from it).
+let catFilter = {q: "", free: false, tools: false};
+
+function modelRow(m, st){
+  const cur = m.id === st.model, curGate = m.id === st.small_model;
+  const price = m.free ? "free" : (m.price_out != null ? `$${m.price_in}/$${m.price_out} per M` : "");
+  const tags = [price, m.context ? Math.round(m.context/1000) + "k ctx" : "",
+                m.tools === false ? "NO tools" : "", m.reasoning ? "reasoning" : ""]
+               .filter(Boolean).join(" · ");
+  return `<div class="tool" style="display:flex;align-items:center;gap:8px;padding:6px 8px">
+    <code style="flex:1;word-break:break-all">${esc(m.id)}</code>
+    <span class="meta" style="margin:0;white-space:nowrap">${esc(tags)}</span>
+    ${curGate ? `<span class="srcpill">GATE</span>`
+              : `<a class="reveal" data-id="${esc(m.id)}" onclick="switchModel(this.dataset.id,true)" title="use as the gate/summary model">gate</a>`}
+    ${cur ? `<span class="srcpill" style="background:var(--good-soft);color:var(--good)">CURRENT</span>`
+          : (m.tools === false ? `<span class="meta" style="margin:0" title="the loop needs tool calling">chat-only</span>`
+                               : `<button class="save" data-id="${esc(m.id)}" onclick="switchModel(this.dataset.id)">use</button>`)}
+  </div>`;
+}
+
+// Slot suggestions are transparent heuristics over catalog metadata (tools,
+// price, context, reasoning), NOT a quality leaderboard. Loop: tool-capable,
+// free first, then biggest context. Gate: cheap non-reasoning instruct-style.
+const GATE_HINT = /instruct|gemma|haiku|flash|mini|nano|lite|small/;
+function loopPicks(ms){
+  return ms.filter(m => m.tools)
+           .sort((a,b) => (b.free - a.free) || ((b.context||0) - (a.context||0))).slice(0, 4);
+}
+function gatePicks(ms){
+  return ms.filter(m => m.tools !== false && m.reasoning !== true
+                        && (m.free || (m.price_out != null && m.price_out <= 1.5)))
+           .sort((a,b) => (GATE_HINT.test(b.id) - GATE_HINT.test(a.id))
+                        || (b.free - a.free) || ((a.price_out||99) - (b.price_out||99))).slice(0, 4);
+}
+
+function renderCatalog(){
+  const box = document.getElementById("catalog");
   if (!box || !modelCatalog) return;
-  const free = (modelCatalog.models || []).filter(m => m.free);
-  const head = document.getElementById("free-models-h");
-  if (!free.length){ box.style.display = "none"; if (head) head.style.display = "none"; return; }
+  const all = modelCatalog.models || [];
+  const head = document.getElementById("catalog-h");
+  if (!modelCatalog.listed || !all.length){
+    box.style.display = "none"; if (head) head.style.display = "none"; return;
+  }
   box.style.display = ""; if (head) head.style.display = "";
+  box.innerHTML = `
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <input id="cat-q" placeholder="filter models…" value="${esc(catFilter.q)}" style="flex:1;min-width:160px"
+        onfocus="markEditing()" oninput="catFilter.q=this.value;renderCatalogList()">
+      <label class="meta" style="margin:0"><input type="checkbox" id="cat-free" ${catFilter.free?"checked":""}
+        onchange="catFilter.free=this.checked;renderCatalogList()"> free only</label>
+      <label class="meta" style="margin:0"><input type="checkbox" id="cat-tools" ${catFilter.tools?"checked":""}
+        onchange="catFilter.tools=this.checked;renderCatalogList()"> tool-capable only</label>
+    </div>
+    <div id="cat-list"></div>
+    <div class="meta" id="free-switch-msg" style="margin-top:6px"></div>`;
+  renderCatalogList();
+}
+
+function renderCatalogList(){
+  const list = document.getElementById("cat-list");
+  if (!list || !modelCatalog) return;
   const st = (D && D.settings) || {};
-  box.innerHTML = free.map(m => {
-    const cur = m.id === st.model, curGate = m.id === st.small_model;
-    const tags = [m.context ? Math.round(m.context/1000) + "k ctx" : "",
-                  m.tools === false ? "no tools" : ""].filter(Boolean).join(" · ");
-    return `<div class="tool" style="display:flex;align-items:center;gap:8px;padding:6px 8px">
-      <code style="flex:1">${esc(m.id)}</code>
-      <span class="meta" style="margin:0">${esc(tags)}</span>
-      ${m.tools === false ? "" : (curGate
-        ? `<span class="srcpill">gate</span>`
-        : `<a class="reveal" data-id="${esc(m.id)}" onclick="switchModel(this.dataset.id,true)">gate</a>`)}
-      ${cur ? `<span class="srcpill" style="background:var(--good-soft);color:var(--good)">current</span>`
-            : `<button class="save" data-id="${esc(m.id)}" onclick="switchModel(this.dataset.id)">use</button>`}
-    </div>`;
-  }).join("") + `<div class="meta" id="free-switch-msg" style="margin-top:6px"></div>`;
+  const all = modelCatalog.models || [];
+  const q = catFilter.q.trim().toLowerCase();
+  const shown = all.filter(m => (!q || m.id.toLowerCase().includes(q))
+                             && (!catFilter.free || m.free)
+                             && (!catFilter.tools || m.tools));
+  let h = "";
+  if (!q && !catFilter.free && !catFilter.tools){
+    h += `<div class="meta" style="margin:4px 0">Suggested picks: transparent heuristics from catalog metadata (tools, price, context), not a quality leaderboard</div>`;
+    h += `<div class="meta" style="margin:6px 0 2px"><b>For the loop</b> (needs tool calling; free first, biggest context)</div>`;
+    h += loopPicks(all).map(m => modelRow(m, st)).join("");
+    h += `<div class="meta" style="margin:10px 0 2px"><b>For the gate</b> (cheap, terse, non-reasoning)</div>`;
+    h += gatePicks(all).map(m => modelRow(m, st)).join("");
+    h += `<div class="meta" style="margin:12px 0 2px"><b>Everything</b> (${all.length} models, by vendor)</div>`;
+  } else {
+    h += `<div class="meta" style="margin:4px 0">${shown.length} of ${all.length} models</div>`;
+  }
+  const vendors = {};
+  shown.forEach(m => (vendors[m.id.split("/")[0]] ??= []).push(m));
+  const expand = q || catFilter.free || catFilter.tools;
+  h += Object.keys(vendors).sort().map(v => `
+    <details ${expand ? "open" : ""}><summary><code>${esc(v)}</code>
+      <span class="meta" style="margin-left:6px">${vendors[v].length}${vendors[v].some(m=>m.free) ? " · has free" : ""}</span></summary>
+      ${vendors[v].map(m => modelRow(m, st)).join("")}
+    </details>`).join("");
+  list.innerHTML = h;
 }
 
 // One-click model switch: same /api/settings path as the Save button, keeping
@@ -758,8 +822,8 @@ const VIEWS = {
       <div style="margin-top:12px"><button class="save" onclick="saveSettings()">Save &amp; switch</button>
         <span class="meta" id="set-msg" style="margin-left:10px"></span></div>
     </div>
-    <h2 id="free-models-h" style="display:none">Free models: click to switch</h2>
-    <div class="card" id="free-models" style="display:none"></div>
+    <h2 id="catalog-h" style="display:none">Model catalog: click to switch</h2>
+    <div class="card" id="catalog" style="display:none"></div>
     <h2>Web search key (optional)</h2><div class="card">
       <div class="meta" style="margin-bottom:8px">A free <a class="reveal" onclick="window.open('https://tavily.com','_blank')">Tavily</a> key makes the <code>search_web</code> tool reliable (the World Cup demo). Stored in your local <code>.env</code>, same as above.</div>
       <label class="fld"><span>Tavily key <span class="meta">(${esc(st.search_key_env||"TAVILY_API_KEY")})</span>

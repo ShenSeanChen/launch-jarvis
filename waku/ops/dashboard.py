@@ -324,7 +324,7 @@ def collect() -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "home": str(home.resolve()),
         "provider": settings.provider,
-        "model": settings.model or "(provider default)",
+        "model": settings_info()["model"],
         "stats": {
             "turns": len(turns),
             "tool_calls": sum(len(t["tools"]) for t in turns),
@@ -724,6 +724,9 @@ def list_models() -> dict:
             "free": mid.endswith(":free") or pricing.get("prompt") == "0",
             # None means the endpoint doesn't say (only OpenRouter reports this)
             "tools": ("tools" in params) if params is not None else None,
+            # reasoning models spend tokens thinking out loud, which breaks the
+            # gate's tiny budget: the UI steers them away from the gate slot
+            "reasoning": ("reasoning" in params) if params is not None else None,
             "context": m.get("context_length"),
         }
         try:

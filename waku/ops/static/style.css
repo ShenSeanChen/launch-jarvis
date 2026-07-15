@@ -206,6 +206,14 @@
   .fld input,.fld select{background:var(--bg);border:1px solid var(--line2);border-radius:8px;padding:9px 12px;
           color:var(--ink);font-size:13.5px;outline:none}
   .fld input:focus,.fld select:focus{border-color:var(--accent)}
+  .cat-controls{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+  .cat-controls input[type=text]{flex:1;min-width:160px;background:var(--bg);border:1px solid var(--line2);
+          border-radius:8px;padding:8px 12px;color:var(--ink);font-size:13.5px;outline:none}
+  .cat-controls input[type=text]:focus{border-color:var(--accent)}
+  .cat-controls input[type=checkbox],#catalog input[type=checkbox]{accent-color:var(--accent)}
+  details.adv{margin:2px 0 10px}
+  details.adv>summary{cursor:pointer;font-size:12.5px;color:var(--ink2)}
+  details.adv[open]>summary{margin-bottom:8px}
   .watchhead{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--ink2);font-weight:600;margin-bottom:8px}
   .chat-arch{max-width:600px;margin:0 auto 16px;border:1px solid var(--line);border-radius:12px;
              padding:8px;background:var(--panel);position:sticky;top:96px;z-index:3}

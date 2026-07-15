@@ -119,7 +119,7 @@ async function loadModelList(){
   const ms = modelCatalog.models || [];
   dl.innerHTML = ms.map(m => {
     const price = m.free ? "free" : (m.price_out != null ? `$${m.price_in}/$${m.price_out} per M` : "");
-    const tags = [price, m.tools === false ? "NO tools" : "",
+    const tags = [price, m.tools === false ? "chat-only" : "", m.reasoning ? "reasoning" : "",
                   m.context ? Math.round(m.context/1000) + "k ctx" : ""].filter(Boolean).join(" · ");
     return `<option value="${esc(m.id)}">${esc(tags)}</option>`;
   }).join("");
@@ -146,12 +146,12 @@ let catFilter = {q: "", free: false, tools: false};
 function modelRow(m, st){
   const cur = m.id === st.model, curGate = m.id === st.small_model;
   const price = m.free ? "free" : (m.price_out != null ? `$${m.price_in}/$${m.price_out} per M` : "");
-  const tags = [price, m.context ? Math.round(m.context/1000) + "k ctx" : "",
-                m.tools === false ? "NO tools" : "", m.reasoning ? "reasoning" : ""]
+  const tags = [price, m.context ? Math.round(m.context/1000) + "k ctx" : ""]
                .filter(Boolean).join(" · ");
   return `<div class="tool" style="display:flex;align-items:center;gap:8px;padding:6px 8px">
     <code style="flex:1;word-break:break-all">${esc(m.id)}</code>
     <span class="meta" style="margin:0;white-space:nowrap">${esc(tags)}</span>
+    ${m.reasoning ? `<span class="srcpill apple" title="thinks out loud before answering: fine for the loop, a poor fit for the gate's tiny token budget">reasoning</span>` : ""}
     ${curGate ? `<span class="srcpill">GATE</span>`
               : `<a class="reveal" data-id="${esc(m.id)}" onclick="switchModel(this.dataset.id,true)" title="use as the gate/summary model">gate</a>`}
     ${cur ? `<span class="srcpill" style="background:var(--good-soft);color:var(--good)">CURRENT</span>`
@@ -185,8 +185,8 @@ function renderCatalog(){
   }
   box.style.display = ""; if (head) head.style.display = "";
   box.innerHTML = `
-    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
-      <input id="cat-q" placeholder="filter models…" value="${esc(catFilter.q)}" style="flex:1;min-width:160px"
+    <div class="cat-controls">
+      <input id="cat-q" type="text" placeholder="filter models…" value="${esc(catFilter.q)}"
         onfocus="markEditing()" oninput="catFilter.q=this.value;renderCatalogList()">
       <label class="meta" style="margin:0"><input type="checkbox" id="cat-free" ${catFilter.free?"checked":""}
         onchange="catFilter.free=this.checked;renderCatalogList()"> free only</label>
@@ -242,7 +242,7 @@ async function switchModel(id, asGate){
     keys: {},
   });
   if (msg) msg.textContent = r.error ? ("Error: " + r.error)
-                                     : (asGate ? "Gate model is now " : "Model is now ") + id + ". Live now.";
+                                     : (asGate ? "Gate model is now " : "Model is now ") + id + ". Applies from your next message.";
   if (!r.error){ editing = false; await refresh(); }
 }
 
@@ -312,7 +312,10 @@ const streamingCard = m => `<div class="card">
   ${(m.tools||[]).map(toolRow).join("")}
   ${m.stream
      ? `<div class="r" style="margin-top:8px">${renderMarkdown(m.stream)}<span class="caret"></span></div>`
-     : `<div class="meta" style="margin:0">thinking&hellip;</div>`}
+     : `<div class="meta" style="margin:0">thinking&hellip;${m.started?` ${Math.round((Date.now()-m.started)/1000)}s`:""}${
+         m.started && Date.now()-m.started > 20000
+         ? `<br>still waiting: slow models (free tiers especially) can queue for a while; this errors out at the WAKU_LLM_TIMEOUT limit instead of hanging forever`
+         : ""}</div>`}
 </div>`;
 
 // Messages loaded from history (a switched/opened conversation) have no live
@@ -362,9 +365,11 @@ async function sendChat(fromInput){
   if (!text) return;
   input.value = "";
   CHAT.push({role:"user", text});
-  const pending = {role:"waku", pending:true, stream:""};
+  const pending = {role:"waku", pending:true, stream:"", started: Date.now()};
   CHAT.push(pending);
   syncChatLogs();
+  // tick the elapsed counter while we wait for the first token
+  const ticker = setInterval(() => { if (pending.pending && !pending.stream) syncChatLogs(); }, 1000);
   try {
     const res = await fetch("/api/chat/stream", {method:"POST",
       headers:{"Content-Type":"application/json"}, body:JSON.stringify({message:text})});
@@ -383,6 +388,7 @@ async function sendChat(fromInput){
       }
     }
   } catch(e){ Object.assign(pending, {pending:false, reply:"Error: "+e}); }
+  clearInterval(ticker);
   if (pending.pending) pending.pending = false;   // stream ended without a 'done'
   syncChatLogs();
   input.focus();
@@ -810,15 +816,18 @@ const VIEWS = {
       <label class="fld">Provider
         <select id="set-provider" onfocus="markEditing()">${st.providers.map(p=>`<option value="${p.name}" ${p.name===st.provider?"selected":""}>${p.name} (default ${esc(p.default_model)})</option>`).join("")}</select></label>
       ${st.base_url?`<div class="meta" style="margin:4px 0 8px">Custom endpoint active: <code>${esc(st.base_url)}</code> (WAKU_BASE_URL${st.custom_key_set?" + WAKU_API_KEY":""}). The model list below comes from it.</div>`:""}
-      <label class="fld">Model <input id="set-model" list="model-list" onfocus="markEditing()" placeholder="blank = provider default" value="${st.model===st.providers.find(p=>p.name===st.provider)?.default_model?"":esc(st.model)}"></label>
-      <label class="fld">Gate / summary model <input id="set-small-model" list="model-list" onfocus="markEditing()" placeholder="blank = provider default" value="${st.small_model===st.providers.find(p=>p.name===st.provider)?.default_small_model?"":esc(st.small_model)}"></label>
+      <details class="adv"><summary>Type a model id manually (advanced; the catalog below switches in one click)</summary>
+      <label class="fld">Model (runs the loop; needs tool calling) <input id="set-model" list="model-list" onfocus="markEditing()" placeholder="blank = provider default" value="${st.model===st.providers.find(p=>p.name===st.provider)?.default_model?"":esc(st.model)}"></label>
+      <label class="fld">Gate / summary model (the small model that decides whether a message needs memory, and distills chats into facts; pick something cheap and terse) <input id="set-small-model" list="model-list" onfocus="markEditing()" placeholder="blank = provider default" value="${st.small_model===st.providers.find(p=>p.name===st.provider)?.default_small_model?"":esc(st.small_model)}"></label>
       <datalist id="model-list"></datalist>
-      <div class="meta" id="model-list-msg" style="margin:4px 0 8px"></div>${(setTimeout(loadModelList,0),"")}
+      <div class="meta" id="model-list-msg" style="margin:4px 0 8px"></div></details>${(setTimeout(loadModelList,0),"")}
+      <details class="adv" ${st.providers.find(p=>p.name===st.provider)?.key_set?"":"open"}><summary>API keys (${st.providers.find(p=>p.name===st.provider)?.key_set?`${esc(st.provider)} key set`:`${esc(st.provider)} key needed`})</summary>
       <div class="meta" style="margin:10px 0 4px">Keys stay in your local <code>.env</code> — never sent back to this page (only a set/not-set status and the last 4 digits). Leave a field blank to keep the current key.</div>
       ${st.providers.map(p=>`<label class="fld"><span>${p.name} key <span class="meta">(${p.key_env})</span>
         ${p.key_set?`<span class="srcpill" style="background:var(--good-soft);color:var(--good)">set ····${esc(p.key_last4)}</span>`
                    :`<span class="srcpill apple">not set</span>`}</span>
         <input type="password" data-key="${p.key_env}" placeholder="${p.key_set?"key on file — blank keeps it":"paste key"}"></label>`).join("")}
+      </details>
       <div style="margin-top:12px"><button class="save" onclick="saveSettings()">Save &amp; switch</button>
         <span class="meta" id="set-msg" style="margin-left:10px"></span></div>
     </div>

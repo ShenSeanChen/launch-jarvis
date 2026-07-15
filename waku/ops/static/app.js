@@ -95,14 +95,91 @@ async function saveSkill(i){
 async function saveSettings(){
   const provider = document.getElementById("set-provider").value;
   const model = document.getElementById("set-model").value.trim();
+  const small_model = (document.getElementById("set-small-model")?.value || "").trim();
   const keys = {};
   document.querySelectorAll("[data-key]").forEach(i => { if(i.value.trim()) keys[i.dataset.key] = i.value.trim(); });
   document.getElementById("set-msg").textContent = "switching…";
-  const r = await postJSON("/api/settings", {provider, model, keys});
+  const r = await postJSON("/api/settings", {provider, model, small_model, keys});
   document.getElementById("set-msg").textContent = r.error ? ("Error: "+r.error) : "Switched to "+r.provider+" — live now.";
-  if(!r.error) refresh();
+  if(!r.error){ modelCatalog = null; refresh(); }
 }
 function markEditing(){ editing = true; }
+
+// Model picker: fill the settings datalist from /api/models (the active
+// endpoint's live catalog; on OpenRouter each entry says free / tool support).
+// Waku's loop needs tool calling, so tool-less models are labelled as such.
+let modelCatalog = null;
+async function loadModelList(){
+  const dl = document.getElementById("model-list");
+  if (!dl) return;
+  if (modelCatalog === null){
+    try { modelCatalog = await (await fetch("/api/models")).json(); }
+    catch(e){ modelCatalog = {models:[], listed:false}; }
+  }
+  const ms = modelCatalog.models || [];
+  dl.innerHTML = ms.map(m => {
+    const tags = [m.free ? "free" : "", m.tools === false ? "NO tools" : "",
+                  m.context ? Math.round(m.context/1000) + "k ctx" : ""].filter(Boolean).join(" · ");
+    return `<option value="${esc(m.id)}">${esc(tags)}</option>`;
+  }).join("");
+  const msg = document.getElementById("model-list-msg");
+  if (!msg) return;
+  if (modelCatalog.listed){
+    const free = ms.filter(m=>m.free), freeTools = free.filter(m=>m.tools);
+    msg.textContent = `${ms.length} models on ${modelCatalog.endpoint}` +
+      (free.length ? ` · ${free.length} free, ${freeTools.length} of those tool-capable (Waku needs tool calling)` : "") +
+      ` · type in the field above to search`;
+  } else {
+    msg.textContent = modelCatalog.error ? `model list unavailable: ${modelCatalog.error}` : "";
+  }
+  renderFreeModels();
+}
+
+// The $0 catalog as one-click switch rows (shown only when the endpoint
+// reports free models, i.e. OpenRouter). Tool-less models still work for
+// plain chat but can't run Waku's calendar/notes/search tools, so they're
+// labelled. "gate" sets the small model instead (pick an instruct model
+// there: reasoning models talk past the gate's tiny token budget).
+function renderFreeModels(){
+  const box = document.getElementById("free-models");
+  if (!box || !modelCatalog) return;
+  const free = (modelCatalog.models || []).filter(m => m.free);
+  const head = document.getElementById("free-models-h");
+  if (!free.length){ box.style.display = "none"; if (head) head.style.display = "none"; return; }
+  box.style.display = ""; if (head) head.style.display = "";
+  const st = (D && D.settings) || {};
+  box.innerHTML = free.map(m => {
+    const cur = m.id === st.model, curGate = m.id === st.small_model;
+    const tags = [m.context ? Math.round(m.context/1000) + "k ctx" : "",
+                  m.tools === false ? "no tools" : ""].filter(Boolean).join(" · ");
+    return `<div class="tool" style="display:flex;align-items:center;gap:8px;padding:6px 8px">
+      <code style="flex:1">${esc(m.id)}</code>
+      <span class="meta" style="margin:0">${esc(tags)}</span>
+      ${m.tools === false ? "" : (curGate
+        ? `<span class="srcpill">gate</span>`
+        : `<a class="reveal" data-id="${esc(m.id)}" onclick="switchModel(this.dataset.id,true)">gate</a>`)}
+      ${cur ? `<span class="srcpill" style="background:var(--good-soft);color:var(--good)">current</span>`
+            : `<button class="save" data-id="${esc(m.id)}" onclick="switchModel(this.dataset.id)">use</button>`}
+    </div>`;
+  }).join("") + `<div class="meta" id="free-switch-msg" style="margin-top:6px"></div>`;
+}
+
+// One-click model switch: same /api/settings path as the Save button, keeping
+// the other slot (main vs gate) as-is. Live for the next turn.
+async function switchModel(id, asGate){
+  const st = (D && D.settings) || {};
+  const msg = document.getElementById("free-switch-msg");
+  if (msg) msg.textContent = "switching…";
+  const r = await postJSON("/api/settings", {
+    provider: st.provider,
+    model: asGate ? st.model : id,
+    small_model: asGate ? id : st.small_model,
+    keys: {},
+  });
+  if (msg) msg.textContent = r.error ? ("Error: " + r.error)
+                                     : (asGate ? "Gate model is now " : "Model is now ") + id + ". Live now.";
+  if (!r.error){ editing = false; await refresh(); }
+}
 
 const money = n => "$" + (n < 0.01 ? n.toFixed(4) : n.toFixed(2));
 const secs = ms => ms==null ? "—" : (ms/1000).toFixed(1)+"s";
@@ -667,7 +744,11 @@ const VIEWS = {
     h += `<h2>Provider &amp; keys (BYOK)</h2><div class="card">
       <label class="fld">Provider
         <select id="set-provider" onfocus="markEditing()">${st.providers.map(p=>`<option value="${p.name}" ${p.name===st.provider?"selected":""}>${p.name} (default ${esc(p.default_model)})</option>`).join("")}</select></label>
-      <label class="fld">Model override <input id="set-model" placeholder="blank = provider default" value="${st.model===st.providers.find(p=>p.name===st.provider)?.default_model?"":esc(st.model)}"></label>
+      ${st.base_url?`<div class="meta" style="margin:4px 0 8px">Custom endpoint active: <code>${esc(st.base_url)}</code> (WAKU_BASE_URL${st.custom_key_set?" + WAKU_API_KEY":""}). The model list below comes from it.</div>`:""}
+      <label class="fld">Model <input id="set-model" list="model-list" onfocus="markEditing()" placeholder="blank = provider default" value="${st.model===st.providers.find(p=>p.name===st.provider)?.default_model?"":esc(st.model)}"></label>
+      <label class="fld">Gate / summary model <input id="set-small-model" list="model-list" onfocus="markEditing()" placeholder="blank = provider default" value="${st.small_model===st.providers.find(p=>p.name===st.provider)?.default_small_model?"":esc(st.small_model)}"></label>
+      <datalist id="model-list"></datalist>
+      <div class="meta" id="model-list-msg" style="margin:4px 0 8px"></div>${(setTimeout(loadModelList,0),"")}
       <div class="meta" style="margin:10px 0 4px">Keys stay in your local <code>.env</code> — never sent back to this page (only a set/not-set status and the last 4 digits). Leave a field blank to keep the current key.</div>
       ${st.providers.map(p=>`<label class="fld"><span>${p.name} key <span class="meta">(${p.key_env})</span>
         ${p.key_set?`<span class="srcpill" style="background:var(--good-soft);color:var(--good)">set ····${esc(p.key_last4)}</span>`
@@ -676,6 +757,8 @@ const VIEWS = {
       <div style="margin-top:12px"><button class="save" onclick="saveSettings()">Save &amp; switch</button>
         <span class="meta" id="set-msg" style="margin-left:10px"></span></div>
     </div>
+    <h2 id="free-models-h" style="display:none">Free models: click to switch</h2>
+    <div class="card" id="free-models" style="display:none"></div>
     <h2>Web search key (optional)</h2><div class="card">
       <div class="meta" style="margin-bottom:8px">A free <a class="reveal" onclick="window.open('https://tavily.com','_blank')">Tavily</a> key makes the <code>search_web</code> tool reliable (the World Cup demo). Stored in your local <code>.env</code>, same as above.</div>
       <label class="fld"><span>Tavily key <span class="meta">(${esc(st.search_key_env||"TAVILY_API_KEY")})</span>

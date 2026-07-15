@@ -119,6 +119,8 @@ def chat_stream(message: str, emit) -> None:
 PRICING = {
     "anthropic": (3.0, 15.0), "openai": (2.5, 15.0), "gemini": (0.3, 2.5),
     "kimi": (0.6, 2.5), "glm": (0.6, 2.2),
+    # openrouter defaults to the :free tier, so the estimate is genuinely $0
+    "openrouter": (0.0, 0.0),
 }
 
 
@@ -648,6 +650,64 @@ def memory_action(payload: dict) -> dict:
     return {"error": f"unknown action {action}"}
 
 
+_models_cache: dict[str, tuple[float, list]] = {}
+
+
+def list_models() -> dict:
+    """Model ids available on the ACTIVE endpoint, for the settings model
+    picker. OpenAI-compatible endpoints (OpenRouter, Gemini, any WAKU_BASE_URL)
+    expose GET {base_url}/models; native-wire providers just offer their two
+    defaults. OpenRouter entries carry free / tool-support / context metadata
+    so the picker can surface the $0 tool-capable models. Cached 5 minutes."""
+    import time
+    import urllib.request
+
+    from waku.loop.models import PROVIDERS
+
+    s = load_settings()
+    prov = PROVIDERS.get(s.provider)
+    base = s.base_url or (prov.base_url if prov else None)
+    out = {
+        "model": s.model or (prov.model if prov else ""),
+        "small_model": s.small_model or (prov.small_model if prov else ""),
+        "endpoint": base or s.provider,
+    }
+    if prov is None or prov.kind != "openai" or not base:
+        # no listing API on the anthropic wire: offer the known defaults
+        known = dict.fromkeys([out["model"], out["small_model"]]
+                              + ([prov.model, prov.small_model] if prov else []))
+        return {**out, "listed": False, "models": [{"id": m} for m in known if m]}
+
+    url = base.rstrip("/") + "/models"
+    cached = _models_cache.get(url)
+    if cached and time.time() - cached[0] < 300:
+        return {**out, "listed": True, "models": cached[1]}
+    key = s.api_key or os.getenv(prov.key_env, "")
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except Exception as exc:
+        return {**out, "listed": False, "models": [], "error": str(exc)}
+    models = []
+    for m in data.get("data", []):
+        mid = m.get("id", "")
+        if not mid:
+            continue
+        pricing = m.get("pricing") or {}
+        params = m.get("supported_parameters")
+        models.append({
+            "id": mid,
+            "free": mid.endswith(":free") or pricing.get("prompt") == "0",
+            # None means the endpoint doesn't say (only OpenRouter reports this)
+            "tools": ("tools" in params) if params is not None else None,
+            "context": m.get("context_length"),
+        })
+    models.sort(key=lambda x: (not x["free"], x["tools"] is False, x["id"]))
+    _models_cache[url] = (time.time(), models)
+    return {**out, "listed": True, "models": models}
+
+
 def settings_info() -> dict:
     """Current provider/model + which keys are set — masked to last-4, never
     the full key."""
@@ -659,11 +719,14 @@ def settings_info() -> dict:
         "provider": s.provider,
         "model": s.model or (prov.model if prov else ""),
         "small_model": s.small_model or (prov.small_model if prov else ""),
+        # a custom endpoint (e.g. OpenRouter) set via WAKU_BASE_URL / WAKU_API_KEY
+        "base_url": s.base_url or "",
+        "custom_key_set": bool(s.api_key),
         "providers": [
             {"name": name, "key_env": p.key_env,
              "key_set": bool(os.getenv(p.key_env)),
              "key_last4": (os.getenv(p.key_env) or "")[-4:],
-             "default_model": p.model}
+             "default_model": p.model, "default_small_model": p.small_model}
             for name, p in PROVIDERS.items()
         ],
         # optional web-search key (Tavily) — same BYOK treatment as provider keys
@@ -749,6 +812,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 — http.server API
         if self.path == "/api/data":
             self._send(json.dumps(collect(), default=str).encode(), "application/json")
+        elif self.path == "/api/models":
+            self._send(json.dumps(list_models()).encode(), "application/json")
         elif self.path.startswith("/api/events"):
             from urllib.parse import parse_qs, urlparse
 

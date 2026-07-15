@@ -6,7 +6,7 @@ in, content blocks out). Providers plug in two ways:
   anthropic wire format (native)     → Anthropic, Kimi/Moonshot, GLM/Z.ai
   openai wire format (thin adapter)  → OpenAI, Google Gemini
 
-Pick with WAKU_PROVIDER=anthropic|openai|gemini|kimi|glm and set that
+Pick with WAKU_PROVIDER=anthropic|openai|openrouter|gemini|kimi|glm and set that
 provider's API key in .env. Override the model ids with WAKU_MODEL /
 WAKU_SMALL_MODEL if the defaults below age out — they're just strings.
 """
@@ -35,6 +35,11 @@ PROVIDERS: dict[str, Provider] = {
                           "claude-sonnet-5", "claude-haiku-4-5-20251001"),
     "openai":    Provider("openai", "OPENAI_API_KEY", None,
                           "gpt-5.6", "gpt-5.6-luna"),
+    # one key, every lab's models, and a $0 tier: the default models below are
+    # free ids (":free" suffix). Rate-limited (~50 req/day without credits).
+    "openrouter": Provider("openai", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1",
+                           "nvidia/nemotron-3-super-120b-a12b:free",
+                           "google/gemma-4-26b-a4b-it:free"),
     "gemini":    Provider("openai", "GEMINI_API_KEY",
                           "https://generativelanguage.googleapis.com/v1beta/openai/",
                           "gemini-3.5-flash", "gemini-3.1-flash-lite"),

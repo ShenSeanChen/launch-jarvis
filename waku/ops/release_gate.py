@@ -66,7 +66,14 @@ def main() -> None:
         print("\nGATE CLOSED — deterministic evals failed. Fix before releasing.")
         sys.exit(1)
 
-    if os.getenv("ANTHROPIC_API_KEY"):
+    # judge needs the ACTIVE provider's key (anthropic, openrouter, ...), same
+    # rule as evals/helpers.HAS_KEY
+    from waku.config import load_settings
+    from waku.loop.models import PROVIDERS
+
+    settings = load_settings()
+    provider = PROVIDERS.get(settings.provider)
+    if settings.api_key or (provider and os.getenv(provider.key_env)):
         code, suites["judge"] = run("judge")
         if code:
             report("pass", "fail", suites)
@@ -75,7 +82,7 @@ def main() -> None:
         report("pass", "pass", suites)
     else:
         report("pass", "skipped", suites)
-        print("\n(judge suite skipped — no ANTHROPIC_API_KEY)")
+        print(f"\n(judge suite skipped: no API key for provider '{settings.provider}')")
 
     print("\nGATE OPEN — safe to release.")
 

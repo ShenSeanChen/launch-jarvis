@@ -149,6 +149,12 @@ class OpenAICompatClient:
     def _create(self, *, model, messages, max_tokens, system=None, tools=None):
         response = self._call(self._to_openai(
             model=model, messages=messages, max_tokens=max_tokens, system=system, tools=tools))
+        if not getattr(response, "choices", None):
+            # some OpenAI-compatible endpoints (e.g. OpenRouter on a rate
+            # limit) return 200 with an error body and no choices: surface
+            # that message instead of dying on a TypeError below
+            err = getattr(response, "error", None) or "endpoint returned no choices"
+            raise RuntimeError(f"{model}: {err}")
         choice = response.choices[0].message
         blocks = []
         if choice.content:

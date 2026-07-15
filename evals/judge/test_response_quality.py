@@ -5,7 +5,7 @@ Waku actually used what it remembered, tone. Scores are 0–1 percentages
 with a threshold, not 0/1 truths — never confuse the two (that confusion is
 exactly what the deterministic suite next door exists to prevent).
 
-Requires ANTHROPIC_API_KEY: the judge is a real model call.
+Requires the active provider's API key: the judge is a real model call.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import pytest
 
 from evals.helpers import HAS_KEY, make_waku
 
-pytestmark = pytest.mark.skipif(not HAS_KEY, reason="LLM-as-judge needs ANTHROPIC_API_KEY")
+pytestmark = pytest.mark.skipif(not HAS_KEY, reason="LLM-as-judge needs the active provider's API key")
 
 
 @pytest.fixture(scope="module")

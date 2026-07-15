@@ -7,7 +7,19 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
-HAS_KEY = bool(os.getenv("ANTHROPIC_API_KEY"))
+def _has_key() -> bool:
+    """True when the ACTIVE provider (WAKU_PROVIDER) has its key set, so live
+    evals run on whatever the user actually configured (anthropic, openrouter,
+    gemini, ...), not only on ANTHROPIC_API_KEY."""
+    from waku.config import load_settings
+    from waku.loop.models import PROVIDERS
+
+    settings = load_settings()
+    provider = PROVIDERS.get(settings.provider)
+    return bool(settings.api_key or (provider and os.getenv(provider.key_env)))
+
+
+HAS_KEY = _has_key()
 
 
 def text_block(text: str):

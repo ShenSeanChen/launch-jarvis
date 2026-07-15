@@ -17,6 +17,12 @@ Memory, and Eval/LLM-Ops. The bar for every change: **readable in an afternoon**
 
 ## Rules
 
+- **Never wipe runtime data without asking first, every time.** `scripts/demo_seed.py`
+  and anything else that clears `.waku` (memory, calendar, chat log, traces, or the
+  `usage.jsonl` spend ledger) must be proposed and explicitly approved by the user
+  *immediately before each run*. Permission never carries over from a previous run.
+  The script backs up first, but restoring is a hassle — ask, wait for a clear yes,
+  then run. It refuses to do anything without the `--yes` flag for this reason.
 - **Version control**: commit at every working milestone with a detailed message —
   subject says what, body says WHY and what the change survived (tests, live use).
   Push to `origin main` after committing. Use the `/ship` skill.

@@ -278,7 +278,7 @@ Langfuse cloud speaks the same OTel toggle.
 ## Recording a clean demo
 
 ```bash
-python scripts/demo_seed.py            # resets .waku to a tidy, curated state
+python scripts/demo_seed.py --yes      # resets .waku to a tidy, curated state (--yes required)
 ```
 
 It backs up your current `.waku` first, then seeds a few clean facts, one episode, and one

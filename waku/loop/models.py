@@ -1,12 +1,12 @@
-"""Model access — five providers, one loop, zero framework.
+"""Model access — six providers, one loop, zero framework.
 
 The loop speaks one dialect: Anthropic's Messages shape (system/messages/tools
 in, content blocks out). Providers plug in two ways:
 
   anthropic wire format (native)     → Anthropic, Kimi/Moonshot, GLM/Z.ai
-  openai wire format (thin adapter)  → OpenAI, Google Gemini
+  openai wire format (thin adapter)  → OpenAI, Google Gemini, DeepSeek
 
-Pick with WAKU_PROVIDER=anthropic|openai|gemini|kimi|glm and set that
+Pick with WAKU_PROVIDER=anthropic|openai|gemini|deepseek|kimi|glm and set that
 provider's API key in .env. Override the model ids with WAKU_MODEL /
 WAKU_SMALL_MODEL if the defaults below age out — they're just strings.
 """
@@ -38,6 +38,8 @@ PROVIDERS: dict[str, Provider] = {
     "gemini":    Provider("openai", "GEMINI_API_KEY",
                           "https://generativelanguage.googleapis.com/v1beta/openai/",
                           "gemini-3.5-flash", "gemini-3.1-flash-lite"),
+    "deepseek":  Provider("openai", "DEEPSEEK_API_KEY", "https://api.deepseek.com",
+                          "deepseek-v4-pro", "deepseek-v4-pro"),
     "kimi":      Provider("anthropic", "MOONSHOT_API_KEY", "https://api.moonshot.ai/anthropic",
                           "kimi-k2.7", "kimi-k2.7"),
     "glm":       Provider("anthropic", "ZHIPU_API_KEY", "https://api.z.ai/api/anthropic",

@@ -118,7 +118,7 @@ def chat_stream(message: str, emit) -> None:
 # actually feel. Keyed by provider; deliberately approximate and labelled "est".
 PRICING = {
     "anthropic": (3.0, 15.0), "openai": (2.5, 15.0), "gemini": (0.3, 2.5),
-    "kimi": (0.6, 2.5), "glm": (0.6, 2.2),
+    "deepseek": (0.435, 0.87), "kimi": (0.6, 2.5), "glm": (0.6, 2.2),
 }
 
 

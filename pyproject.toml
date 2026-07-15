@@ -8,7 +8,7 @@ authors = [{ name = "Sean Chen (ShenSeanChen)" }]
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.40",   # anthropic wire format: Anthropic, Kimi, GLM
-    "openai>=1.50",      # openai wire format: OpenAI, Gemini (and embeddings)
+    "openai>=1.50",      # openai wire format: OpenAI, Gemini, DeepSeek (and embeddings)
     "python-dotenv>=1.0",
     "rich>=13.0",
 ]

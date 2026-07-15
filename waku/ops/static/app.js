@@ -118,7 +118,8 @@ async function loadModelList(){
   }
   const ms = modelCatalog.models || [];
   dl.innerHTML = ms.map(m => {
-    const tags = [m.free ? "free" : "", m.tools === false ? "NO tools" : "",
+    const price = m.free ? "free" : (m.price_out != null ? `$${m.price_in}/$${m.price_out} per M` : "");
+    const tags = [price, m.tools === false ? "NO tools" : "",
                   m.context ? Math.round(m.context/1000) + "k ctx" : ""].filter(Boolean).join(" · ");
     return `<option value="${esc(m.id)}">${esc(tags)}</option>`;
   }).join("");

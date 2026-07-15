@@ -119,9 +119,26 @@ def chat_stream(message: str, emit) -> None:
 PRICING = {
     "anthropic": (3.0, 15.0), "openai": (2.5, 15.0), "gemini": (0.3, 2.5),
     "kimi": (0.6, 2.5), "glm": (0.6, 2.2),
-    # openrouter defaults to the :free tier, so the estimate is genuinely $0
-    "openrouter": (0.0, 0.0),
+    # openrouter fallback for paid models when the live catalog is unreachable
+    # (rough mid-catalog guess). ":free" ids and catalog-priced models never
+    # hit this: see price_for().
+    "openrouter": (1.0, 3.0),
 }
+
+# model id -> exact ($/M in, $/M out), filled from the live catalog fetch in
+# list_models(). OpenRouter reports per-model pricing, so cost estimates can
+# be exact per call instead of one number per provider.
+_price_cache: dict[str, tuple[float, float]] = {}
+
+
+def price_for(provider: str, model: str) -> tuple[float, float]:
+    """$/M tokens (in, out) for one call: the catalog's per-model price when
+    known, $0 for ":free" ids, else the provider-level PRICING estimate."""
+    if model in _price_cache:
+        return _price_cache[model]
+    if model.endswith(":free"):
+        return (0.0, 0.0)
+    return PRICING.get(provider, (3.0, 15.0))
 
 
 def usage_summary(home) -> dict:
@@ -139,7 +156,8 @@ def usage_summary(home) -> dict:
                 pass
 
     def cost(r) -> float:
-        pin, pout = PRICING.get(r.get("provider"), (3.0, 15.0))
+        # the ledger stores tokens + provider/model, so old rows reprice too
+        pin, pout = price_for(r.get("provider", ""), r.get("model", ""))
         return r.get("in", 0) / 1e6 * pin + r.get("out", 0) / 1e6 * pout
 
     def add(bucket, key, extra):
@@ -230,7 +248,9 @@ def collect() -> dict:
         turns.append(current)
 
     # --- derive per-turn latency + dollar cost (the ops numbers humans feel)
-    price_in, price_out = PRICING.get(settings.provider, (3.0, 15.0))
+    if settings.base_url or settings.provider == "openrouter":
+        list_models()  # warm the per-model price cache (5-min cached fetch)
+    price_in, price_out = price_for(settings.provider, settings.model or "")
     for t in turns:
         start, end = _parse_ts(t["ts"]), None
         last = t["llm_calls"][-1]["ts"] if t["llm_calls"] else None
@@ -688,6 +708,9 @@ def list_models() -> dict:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
     except Exception as exc:
+        # cache the failure for ~1 minute so an unreachable catalog doesn't
+        # stall every 5-second dashboard poll for 10s
+        _models_cache[url] = (time.time() - 240, [])
         return {**out, "listed": False, "models": [], "error": str(exc)}
     models = []
     for m in data.get("data", []):
@@ -696,13 +719,21 @@ def list_models() -> dict:
             continue
         pricing = m.get("pricing") or {}
         params = m.get("supported_parameters")
-        models.append({
+        entry = {
             "id": mid,
             "free": mid.endswith(":free") or pricing.get("prompt") == "0",
             # None means the endpoint doesn't say (only OpenRouter reports this)
             "tools": ("tools" in params) if params is not None else None,
             "context": m.get("context_length"),
-        })
+        }
+        try:
+            # OpenRouter prices are $/token strings; keep $/M for display + cost
+            pin, pout = float(pricing["prompt"]) * 1e6, float(pricing["completion"]) * 1e6
+            _price_cache[mid] = (pin, pout)
+            entry["price_in"], entry["price_out"] = round(pin, 3), round(pout, 3)
+        except (KeyError, TypeError, ValueError):
+            pass
+        models.append(entry)
     models.sort(key=lambda x: (not x["free"], x["tools"] is False, x["id"]))
     _models_cache[url] = (time.time(), models)
     return {**out, "listed": True, "models": models}

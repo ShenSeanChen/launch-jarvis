@@ -64,9 +64,9 @@ laptop. Set `TELEGRAM_BOT_TOKEN` and it starts your bot too. (`make dashboard` w
 *"Book a catch-up with Alex on Friday."* → it remembers, and books 9am. Your memory is one
 file: `.waku/state.db`.
 
-**Use the model you already pay for.** Anthropic (default), OpenAI, Gemini, DeepSeek, Kimi, or GLM —
-set `WAKU_PROVIDER=`, paste the key, done. One dialect in the loop; a
-[~60-line adapter](waku/loop/models.py) handles the rest.
+**Use the model you already pay for.** Anthropic (default), OpenAI, Gemini, DeepSeek, Kimi,
+GLM, or OpenRouter (one key, hundreds of hosted models) — set `WAKU_PROVIDER=`, paste the key,
+done. One dialect in the loop; a [~60-line adapter](waku/loop/models.py) handles the rest.
 
 ## Watch the harness run — the dashboard
 

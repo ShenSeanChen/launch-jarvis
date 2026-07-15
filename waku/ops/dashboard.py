@@ -116,9 +116,12 @@ def chat_stream(message: str, emit) -> None:
 
 # Rough $/million tokens (in, out) for a dollar ESTIMATE — the number humans
 # actually feel. Keyed by provider; deliberately approximate and labelled "est".
+# openrouter fans out to many underlying models at very different prices; this
+# row assumes the default model (see PROVIDERS) — real cost varies with WAKU_MODEL.
 PRICING = {
     "anthropic": (3.0, 15.0), "openai": (2.5, 15.0), "gemini": (0.3, 2.5),
     "deepseek": (0.435, 0.87), "kimi": (0.6, 2.5), "glm": (0.6, 2.2),
+    "openrouter": (3.0, 15.0),
 }
 
 

@@ -4,11 +4,14 @@ The loop speaks one dialect: Anthropic's Messages shape (system/messages/tools
 in, content blocks out). Providers plug in two ways:
 
   anthropic wire format (native)     → Anthropic, Kimi/Moonshot, GLM/Z.ai
-  openai wire format (thin adapter)  → OpenAI, Google Gemini, DeepSeek
+  openai wire format (thin adapter)  → OpenAI, Google Gemini, DeepSeek, OpenRouter
 
-Pick with WAKU_PROVIDER=anthropic|openai|gemini|deepseek|kimi|glm and set that
-provider's API key in .env. Override the model ids with WAKU_MODEL /
-WAKU_SMALL_MODEL if the defaults below age out — they're just strings.
+Pick with WAKU_PROVIDER=anthropic|openai|gemini|deepseek|kimi|glm|openrouter and
+set that provider's API key in .env. Override the model ids with WAKU_MODEL /
+WAKU_SMALL_MODEL if the defaults below age out — they're just strings. This
+matters most for openrouter: it's a single key in front of hundreds of
+models, so WAKU_MODEL=<vendor>/<model> (e.g. "google/gemini-3.5-flash") picks
+whichever one you want.
 """
 
 from __future__ import annotations
@@ -44,6 +47,8 @@ PROVIDERS: dict[str, Provider] = {
                           "kimi-k2.7", "kimi-k2.7"),
     "glm":       Provider("anthropic", "ZHIPU_API_KEY", "https://api.z.ai/api/anthropic",
                           "glm-5.2", "glm-5-turbo"),
+    "openrouter": Provider("openai", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1",
+                           "anthropic/claude-sonnet-5", "anthropic/claude-haiku-4.5"),
 }
 
 

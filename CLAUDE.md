@@ -40,8 +40,8 @@ for its own sake is not.
   full assistant. New capabilities (providers, tools, gateways, integrations) are welcome
   when they're self-contained, tested, and keep the core legible. Reject only complexity
   that muddies how the system works or bloats the default path — prefer opt-in extras.
-- Providers are framed neutrally in docs (Anthropic, OpenAI, Gemini, Kimi, GLM) —
-  no ranking, no "open-source vs closed" framing.
+- Providers are framed neutrally in docs (Anthropic, OpenAI, Gemini, DeepSeek, Kimi, GLM,
+  OpenRouter) — no ranking, no "open-source vs closed" framing.
 
 ## Commands
 

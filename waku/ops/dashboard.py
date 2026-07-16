@@ -633,7 +633,7 @@ def memory_action(payload: dict) -> dict:
             return {"error": "can only edit SKILL.md files inside the skills folders"}
         if _parse_text(text, dest) is None:
             return {"error": "invalid SKILL.md — needs a name and description in the frontmatter"}
-        dest.write_text(text.rstrip() + "\n")
+        dest.write_text(text.rstrip() + "\n", encoding="utf-8")
         return {"ok": True}
 
     conn = connect(settings.home)

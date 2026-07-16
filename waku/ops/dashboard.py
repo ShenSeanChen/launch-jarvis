@@ -120,7 +120,7 @@ def chat_stream(message: str, emit) -> None:
 # row assumes the default model (see PROVIDERS) — real cost varies with WAKU_MODEL.
 PRICING = {
     "anthropic": (3.0, 15.0), "openai": (2.5, 15.0), "gemini": (0.3, 2.5),
-    "deepseek": (0.435, 0.87), "kimi": (0.6, 2.5), "glm": (0.6, 2.2),
+    "deepseek": (0.435, 0.87), "minimax": (0.30, 1.20), "kimi": (0.6, 2.5), "glm": (0.6, 2.2),
     "openrouter": (3.0, 15.0),
 }
 

@@ -447,9 +447,11 @@ function archSVG(d){
     ${flow("M336 100 L370 100","","e-wm-loop")}
     ${flow("M538 100 L558 106")}${flowLbl(542,93,"reply")}
     ${box(558,84,104,52,"Reply","→ back to you","loop","","reply")}
-    <!-- reply loops back to the gateway (next turn), arced well clear of the loop -->
-    <path class="flow" data-edge="e-reply-gw" d="M610 84 C610 28 360 28 96 66" marker-end="url(#arr)"/>
-    ${flowLbl(376,24,"next turn")}
+    <!-- The gateway is the door IN and OUT: the reply leaves through the very
+         gateway it arrived at (Telegram sends it, the CLI prints it, voice
+         speaks it, the dashboard streams it). A clean over-the-top arc. -->
+    <path class="flow" data-edge="e-reply-gw" d="M604 82 C548 40 172 40 100 70" marker-end="url(#arr)"/>
+    ${flowLbl(352,32,"reply, out the same gateway","middle")}
     <!-- every turn is saved for consolidation: down a clear right lane,
          then left into the consolidation box -->
     <path class="flow dash" data-edge="e-reply-save" d="M650 136 C660 150 660 200 660 600 L614 600" marker-end="url(#arr)"/>

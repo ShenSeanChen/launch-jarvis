@@ -842,6 +842,13 @@ def apply_settings(payload: dict) -> dict:
     updates = {"WAKU_PROVIDER": provider,
                "WAKU_MODEL": payload.get("model", "") or "",
                "WAKU_SMALL_MODEL": payload.get("small_model", "") or ""}
+    # Changing provider ALWAYS resets model overrides to the new provider's
+    # defaults. Model ids never transfer across endpoints (live bug: switching
+    # kimi->gemini carried gate model kimi-k3 and every turn 404'd against
+    # Gemini). Want a custom model on the new provider? Pick it after switching.
+    if provider != before["provider"]:
+        updates["WAKU_MODEL"] = ""
+        updates["WAKU_SMALL_MODEL"] = ""
     for k, v in (payload.get("keys") or {}).items():
         if k in writable and v:  # only non-empty keys overwrite
             updates[k] = v

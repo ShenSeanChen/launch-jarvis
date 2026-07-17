@@ -118,7 +118,7 @@ def chat_stream(message: str, emit) -> None:
 # actually feel. Keyed by provider; deliberately approximate and labelled "est".
 PRICING = {
     "anthropic": (3.0, 15.0), "openai": (2.5, 15.0), "gemini": (0.3, 2.5),
-    "kimi": (0.6, 2.5), "glm": (0.6, 2.2),
+    "deepseek": (0.435, 0.87), "minimax": (0.30, 1.20), "kimi": (0.6, 2.5), "glm": (0.6, 2.2),
     # openrouter fallback for paid models when the live catalog is unreachable
     # (rough mid-catalog guess). ":free" ids and catalog-priced models never
     # hit this: see price_for().
@@ -652,7 +652,7 @@ def memory_action(payload: dict) -> dict:
             return {"error": "can only edit SKILL.md files inside the skills folders"}
         if _parse_text(text, dest) is None:
             return {"error": "invalid SKILL.md — needs a name and description in the frontmatter"}
-        dest.write_text(text.rstrip() + "\n")
+        dest.write_text(text.rstrip() + "\n", encoding="utf-8")
         return {"ok": True}
 
     conn = connect(settings.home)

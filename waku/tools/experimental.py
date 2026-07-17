@@ -1,27 +1,35 @@
-"""Roadmap tools — the whiteboard boxes not wired into the loop yet.
+"""Roadmap tools — the whiteboard boxes beyond the flagship task.
 
-These are SKELETONS on purpose. Each shows the *shape* of a capability from the
-architecture chart and returns an honest "coming soon", so the diagram maps to
-something real without pretending the feature is done. They are OFF by default;
-set `WAKU_EXPERIMENTAL=1` to register them (they'll just report their status).
+One of them is now ALIVE: `delegate_task` (the Sub-Agents box) hands a coding
+job to pi (https://github.com/earendil-works/pi) — a minimal open-source coding
+agent by Mario Zechner — through its headless print mode (`pi -p "task"`).
+The division of labor is the teaching point: Waku is the orchestrator (memory,
+working-memory assembly, evals, the human's context) and pi is the specialist
+contractor (read/bash/edit/write, pure coding craft). Waku hires; pi codes;
+Waku's release gate can then inspect the work. v2 idea: run `pi --mode json`
+and stream its per-turn events into the dashboard's Loop tab.
 
-Why skeletons, not full builds? Each one crosses the repo's "one flagship task,
-readable in an afternoon" line — sub-agents add multi-agent coordination;
-terminal/browser tools add a sandbox and a real safety surface. They're the
-sequel. The dashboard shows them under "Coming soon" so expectations are set,
-not over-promised.
+The other three boxes are still SKELETONS on purpose: each shows the *shape* of
+a capability and returns an honest "coming soon" (terminal/browser tools need a
+real sandbox + safety surface first). Everything here is OFF by default; set
+`WAKU_EXPERIMENTAL=1` to register these tools.
 """
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+from datetime import datetime
+from pathlib import Path
+
+from waku.config import Settings
 from waku.tools.registry import Tool
 
-# name → what it will do, and which box on the whiteboard it maps to.
+PI_INSTALL_HINT = "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
+
+# Still-skeleton boxes: name → what it will do, and its box on the whiteboard.
 PLANNED = [
-    {"name": "delegate_task", "box": "Sub-Agents",
-     "description": "Spawn a fresh agent run for a self-contained subtask and return its "
-                    "result — the whiteboard's Sub-Agent boxes. Left out to keep the core "
-                    "single-agent and readable."},
     {"name": "run_command", "box": "Terminal tool",
      "description": "Run a shell command in a sandbox and read the output — Hermes's 'Terminal' "
                     "tool. Needs a real sandbox + safety surface first."},
@@ -34,6 +42,77 @@ PLANNED = [
 ]
 
 
+def make_delegate_tool(settings: Settings) -> Tool:
+    """The Sub-Agents box, wired for real: delegate a coding task to pi.
+
+    Same honesty contract as every Waku tool — the return string says exactly
+    what happened (done / failed / timed out / pi not installed), short enough
+    for the voice gateway to speak. The full pi transcript goes to the outbox.
+    """
+
+    def delegate_task(task: str = "", cwd: str = "", timeout_seconds: int = 0) -> str:
+        if not task.strip():
+            return ("delegate_task needs a 'task' — a plain-English description of the "
+                    "coding job, e.g. 'fix the failing test in this repo'.")
+        pi_bin = shutil.which("pi")
+        if not pi_bin:
+            return f"pi isn't installed, so I can't delegate. Install it with: {PI_INSTALL_HINT}"
+
+        if cwd:
+            workdir = Path(cwd).expanduser()
+            if not workdir.is_dir():
+                return f"delegate_task: the working directory '{cwd}' doesn't exist."
+        else:
+            workdir = settings.home / "delegate"   # scratch sandbox for repo-less tasks
+            workdir.mkdir(parents=True, exist_ok=True)
+
+        timeout = int(timeout_seconds) or int(os.getenv("WAKU_DELEGATE_TIMEOUT", "300"))
+        try:
+            result = subprocess.run([pi_bin, "-p", task], cwd=workdir, capture_output=True,
+                                    text=True, timeout=timeout, check=False)
+        except subprocess.TimeoutExpired:
+            return (f"pi was still working after {timeout}s so I stopped it — try a smaller "
+                    f"task, or raise WAKU_DELEGATE_TIMEOUT.")
+        except OSError as exc:
+            return f"Couldn't launch pi: {exc}"
+
+        # Full paper trail in the outbox; only a short, speakable summary goes
+        # back into the loop (tool results live in working memory).
+        log = settings.home / "outbox" / f"delegate-{datetime.now():%Y%m%d-%H%M%S}.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(f"$ pi -p {task!r}   (cwd: {workdir})\n\n--- stdout ---\n"
+                       f"{result.stdout}\n--- stderr ---\n{result.stderr}", encoding="utf-8")
+
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout).strip()[-200:] or "no output"
+            return f"pi hit an error: {err} (full log: .waku/outbox/{log.name})"
+        summary = result.stdout.strip()[-600:] or "(pi finished but printed nothing)"
+        return (f"pi finished the delegated task in {workdir}.\n{summary}\n"
+                f"(full log: .waku/outbox/{log.name})")
+
+    return Tool(
+        name="delegate_task",
+        description=("Delegate a CODING task (fixing tests, multi-file edits, writing "
+                     "programs) to pi, a specialist coding agent running locally on this "
+                     "machine. Give it a self-contained task and, when the work targets an "
+                     "existing project, that project's absolute path as cwd. Use this for "
+                     "real programming work instead of describing code in chat."),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "task": {"type": "string",
+                         "description": "Plain-English description of the coding job, self-contained"},
+                "cwd": {"type": "string",
+                        "description": "Absolute path of the repo/directory to work in; omit for a scratch sandbox"},
+                "timeout_seconds": {"type": "integer",
+                                    "description": "Max seconds to let pi work (default 300)"},
+            },
+            "required": ["task"],
+        },
+        fn=delegate_task,
+    )
+
+
 def _stub(name: str, description: str, box: str) -> Tool:
     def fn(**kwargs) -> str:
         return (f"'{name}' maps to the '{box}' box on the architecture chart and isn't wired "
@@ -43,6 +122,9 @@ def _stub(name: str, description: str, box: str) -> Tool:
                 input_schema={"type": "object", "properties": {}}, fn=fn)
 
 
-def make_tools() -> list[Tool]:
-    """The stub tools, registered only when WAKU_EXPERIMENTAL=1."""
-    return [_stub(p["name"], p["description"], p["box"]) for p in PLANNED]
+def make_tools(settings: Settings) -> list[Tool]:
+    """Experimental tools, registered only when WAKU_EXPERIMENTAL=1: the live
+    pi delegation plus the remaining skeletons."""
+    return [make_delegate_tool(settings)] + [
+        _stub(p["name"], p["description"], p["box"]) for p in PLANNED
+    ]

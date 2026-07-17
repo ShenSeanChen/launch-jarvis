@@ -11,6 +11,5 @@ dist/
 .ruff_cache/
 .waku/
 .waku.bak-*/
-.jarvis.prerename-bak/
+.waku.prerename-bak/
 .env.prerename-bak
-.jarvis.bak-*/

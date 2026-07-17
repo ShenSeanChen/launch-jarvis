@@ -6,5 +6,5 @@ Start from [`skills/TEMPLATE.md`](../TEMPLATE.md); see [CONTRIBUTING.md](../../C
 Try any skill from anywhere:
 
 ```bash
-python -m jarvis skill install <link-to-a-SKILL.md>
+python -m waku skill install <link-to-a-SKILL.md>
 ```

@@ -29,12 +29,13 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) ->
         registry.register(memory_admin.make_update_soul_tool(settings))
         registry.register(memory_admin.make_create_skill_tool(settings, memory))
 
-    # Roadmap/skeleton tools (sub-agents, terminal, browser, cron) — off by
-    # default; opt in with WAKU_EXPERIMENTAL=1. They report "coming soon".
+    # Experimental tools — off by default; opt in with WAKU_EXPERIMENTAL=1.
+    # delegate_task (sub-agents via pi) is live; terminal/browser/cron are
+    # still skeletons that report "coming soon".
     if os.getenv("WAKU_EXPERIMENTAL", "") in ("1", "true", "yes"):
         from waku.tools import experimental
 
-        for t in experimental.make_tools():
+        for t in experimental.make_tools(settings):
             registry.register(t)
 
     # Apple ecosystem readers/writers (opt-in; first use triggers macOS prompts).

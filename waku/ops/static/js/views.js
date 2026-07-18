@@ -451,6 +451,10 @@ const VIEWS = {
       `<tr><td>${esc((t.user_message||"").slice(0,48))}</td><td class="meta">${secs(t.latency_ms)}</td><td class="meta">${money(t.cost||0)}</td><td class="meta">${(t.tools||[]).map(x=>x.tool).join(", ")||"—"}</td></tr>`));
 
     h += `<h2>Tracing <span class="meta" style="font-weight:400">· every turn as JSONL, always on</span></h2>`;
+    if ((d.trace_errors||[]).length){
+      h += d.trace_errors.map(e => `<div class="card"><span class="pill fail">trace encoding error</span>
+        <div class="meta" style="margin-top:8px"><code>${esc(e.file)}</code> — ${esc(e.error)}</div></div>`).join("");
+    }
     h += `<div class="card"><span class="r">${s.trace_files} trace file(s) in <code>traces/</code>${
       d.trace_file?` (newest: <code>${esc(d.trace_file)}</code>)`:""}. ${reveal("traces","open the traces folder")}.
       A trace is just "what happened, in order" — here are the most recent lines:</span></div>`;

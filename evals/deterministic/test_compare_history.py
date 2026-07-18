@@ -34,6 +34,15 @@ def test_it_writes_to_its_own_file_not_state_db(tmp_path):
     assert not (tmp_path / "state.db").exists()   # never touches the agent's DB
 
 
+def test_clear_wipes_only_the_history(tmp_path):
+    ch.append_run(tmp_path, "hi", [_result("a:b", "b", 1, 1, 1, 0.0)])
+    (tmp_path / "state.db").write_text("real data")   # a sibling that must survive
+    ch.clear(tmp_path)
+    assert ch.load_runs(tmp_path) == []
+    assert not (tmp_path / "compare" / "history.jsonl").exists()
+    assert (tmp_path / "state.db").read_text() == "real data"   # untouched
+
+
 def test_history_is_capped(tmp_path, monkeypatch):
     monkeypatch.setattr(ch, "MAX_RUNS", 3)
     for i in range(5):

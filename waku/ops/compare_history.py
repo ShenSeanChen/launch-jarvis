@@ -69,6 +69,12 @@ def append_run(home: Path, message: str, results: list[dict], ts: str | None = N
     path.write_text("\n".join(json.dumps(r) for r in runs) + "\n")
 
 
+def clear(home: Path) -> None:
+    """Wipe the compare history (the scoreboard's Clear button). Only removes the
+    arena's own log — nothing else is touched."""
+    _path(home).unlink(missing_ok=True)
+
+
 def load_runs(home: Path, limit: int | None = None) -> list[dict]:
     """Recent races, oldest -> newest. `limit` returns only the last N."""
     path = _path(home)

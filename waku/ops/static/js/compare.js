@@ -35,6 +35,12 @@ async function loadCompareHistory(){
   editing = false;   // ensure the scoreboard redraw isn't skipped by the edit-guard
   render();
 }
+async function clearCompareHistory(){
+  if (!confirm("Clear the compare scoreboard and race history? (Only the arena's own log — your real data is untouched.)")) return;
+  const r = await postJSON("/api/compare/clear", {});
+  compareState.history = r.runs || []; compareState.aggregate = r.aggregate || [];
+  editing = false; render();
+}
 // A stored (slimmed) result -> the shape compareCol expects (gate object, tool
 // objects), so a past race renders identically to a live one.
 function adaptHistResult(r){
@@ -247,7 +253,9 @@ function compareHistoryHtml(){
   const hist = compareState.history || [];
   if (!agg.length && !hist.length) return "";
   const scoreboard = agg.length ? `
-    <h2 style="margin-top:22px">Scoreboard <span class="meta" style="font-weight:400">— averaged across ${hist.length} race${hist.length===1?"":"s"}</span></h2>
+    <h2 style="margin-top:22px;display:flex;align-items:center;gap:10px">Scoreboard
+      <span class="meta" style="font-weight:400">— averaged across ${hist.length} race${hist.length===1?"":"s"}</span>
+      <a class="reveal" style="margin-left:auto;font-size:12px" onclick="clearCompareHistory()">clear</a></h2>
     <div class="card" style="padding:4px 8px"><table>
       <tr><th>model</th><th>races</th><th>ok</th><th>avg time</th><th>avg tokens</th><th>avg cost</th></tr>
       ${agg.map(a=>`<tr>

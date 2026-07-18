@@ -327,6 +327,13 @@ def compare_stream(message: str, specs: list, emit) -> None:
     emit("done", {})
 
 
+def compare_clear(payload: dict) -> dict:
+    """Wipe the Compare scoreboard/history (the Clear button). Only the arena's
+    own log; nothing else is touched."""
+    compare_history.clear(load_settings().home)
+    return {"ok": True, "runs": [], "aggregate": []}
+
+
 # Rough $/million tokens (in, out) for a dollar ESTIMATE — the number humans
 # actually feel. Keyed by provider; deliberately approximate and labelled "est".
 PRICING = {
@@ -1323,7 +1330,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         routes = {"/api/chat": None, "/api/memory": memory_action, "/api/settings": apply_settings,
                   "/api/query": run_query, "/api/session": session_action, "/api/pin": pin_action,
-                  "/api/compare": compare_models}
+                  "/api/compare": compare_models, "/api/compare/clear": compare_clear}
         if self.path not in routes:
             self.send_response(404)
             self.end_headers()

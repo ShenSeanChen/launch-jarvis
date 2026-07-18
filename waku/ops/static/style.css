@@ -307,3 +307,22 @@
   .empty{color:var(--ink3);font-style:normal;font-size:13px}
   code{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid var(--line);
        padding:1px 5px;border-radius:4px}
+  /* Model arena (Compare tab): message + model picks, then a scrolling row of
+     one result column per model. */
+  .cmp-input{width:100%;background:var(--bg);border:1px solid var(--line2);border-radius:8px;
+       padding:10px 12px;color:var(--ink);font-size:13.5px;font-family:inherit;outline:none;resize:vertical}
+  .cmp-input:focus{border-color:var(--accent)}
+  .cmp-picks{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .cmp-pick{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--ink2);
+       border:1px solid var(--line2);border-radius:99px;padding:4px 10px;cursor:pointer}
+  .cmp-pick.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+  .cmp-pick input{margin:0}
+  .cmp-grid{display:flex;gap:12px;margin-top:12px;overflow-x:auto;padding-bottom:6px;align-items:stretch}
+  .cmp-col{flex:0 0 300px;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+       padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+  .cmp-col.err{border-color:var(--bad)}
+  .cmp-h{display:flex;align-items:center;gap:6px;font-size:13px}
+  .cmp-stats{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+  .chip{font-size:11px;color:var(--ink2);border:1px solid var(--line2);border-radius:99px;padding:1px 8px}
+  .chip.money{color:var(--good);border-color:var(--good)}
+  .cmp-reply{margin-top:2px;font-size:13px;max-height:340px;overflow-y:auto}

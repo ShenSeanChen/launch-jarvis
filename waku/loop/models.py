@@ -56,11 +56,11 @@ PROVIDERS: dict[str, Provider] = {
                           "claude-sonnet-5", "claude-haiku-4-5-20251001",
                           catalog_url="https://api.anthropic.com/v1/models",
                           flagship="claude-opus-4-8", fast="claude-sonnet-5"),
+    # gpt-5.6 ships as luna/sol/terra variants (no bare "gpt-5.6"); sol is the
+    # flagship, luna the small/fast one. base_url is None (SDK default endpoint),
+    # so point the picker at OpenAI's catalog explicitly, like anthropic/kimi.
     "openai":    Provider("openai", "OPENAI_API_KEY", None,
-                          "gpt-5.6", "gpt-5.6-luna",
-                          # base_url is None (SDK default endpoint), so the
-                          # picker can't derive {base}/models — point it at
-                          # OpenAI's catalog explicitly, like anthropic/kimi.
+                          "gpt-5.6-sol", "gpt-5.6-luna",
                           catalog_url="https://api.openai.com/v1/models"),
     # one key, every lab's models, and a $0 tier: the default models below are
     # free ids (":free" suffix). Rate-limited (~50 req/day without credits).
@@ -86,6 +86,12 @@ PROVIDERS: dict[str, Provider] = {
                           flagship="kimi-k3", fast="kimi-k2.7-code-highspeed"),
     "glm":       Provider("anthropic", "ZHIPU_API_KEY", "https://api.z.ai/api/anthropic",
                           "glm-5.2", "glm-5-turbo"),
+    # xAI Grok on its OpenAI-compatible endpoint. The model ids below are
+    # starting points — add XAI_API_KEY and the picker lists the live catalog
+    # (the authoritative source); pin whatever the current flagship/fast are.
+    "xai":       Provider("openai", "XAI_API_KEY", "https://api.x.ai/v1",
+                          "grok-4", "grok-4-fast",
+                          catalog_url="https://api.x.ai/v1/models"),
 }
 
 
@@ -177,10 +183,16 @@ class OpenAICompatClient:
     def _call(self, kwargs: dict, **extra):
         """Run chat.completions.create with the max_tokens key-name fallback
         (older OpenAI-compatible endpoints only know max_tokens, not the newer
-        max_completion_tokens)."""
+        max_completion_tokens). Only retry when the error is ABOUT that param —
+        retrying on any error masked the real failure (e.g. a gpt-5.x call would
+        fail for some other reason, then the max_tokens retry buried it under a
+        confusing 'use max_completion_tokens' message)."""
         try:
             return self._client.chat.completions.create(**kwargs, **extra)
-        except Exception:
+        except Exception as exc:
+            m = str(exc).lower()
+            if "max_completion_tokens" not in m and "max_tokens" not in m:
+                raise
             k = dict(kwargs)
             k["max_tokens"] = k.pop("max_completion_tokens", None)
             return self._client.chat.completions.create(**k, **extra)

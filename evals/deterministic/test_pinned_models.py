@@ -19,7 +19,8 @@ from waku.ops import dashboard as d
 
 
 PROVIDER_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY",
-                 "MINIMAX_API_KEY", "MOONSHOT_API_KEY", "ZHIPU_API_KEY", "OPENROUTER_API_KEY")
+                 "MINIMAX_API_KEY", "MOONSHOT_API_KEY", "ZHIPU_API_KEY", "OPENROUTER_API_KEY",
+                 "XAI_API_KEY")
 
 
 @pytest.fixture
@@ -140,7 +141,7 @@ def test_known_catalog_providers_can_list(home):
     they intentionally show their curated defaults until we wire+verify one."""
     from waku.loop.models import PROVIDERS
 
-    CAN_LIST = {"anthropic", "openai", "openrouter", "gemini", "deepseek", "kimi"}
+    CAN_LIST = {"anthropic", "openai", "openrouter", "gemini", "deepseek", "kimi", "xai"}
     for name in CAN_LIST:
         prov = PROVIDERS[name]
         can_list = bool(prov.catalog_url) or (prov.kind == "openai" and bool(prov.base_url))
@@ -155,7 +156,8 @@ def test_list_models_honors_provider_override(home, monkeypatch):
     from waku.loop.models import PROVIDERS
 
     url = PROVIDERS["kimi"].catalog_url
-    monkeypatch.setattr(d, "_models_cache", {url: (time.time(), [{"id": "kimi-k3"}])})
+    # cache tuple is (ts, models, error) — None error means a real listing
+    monkeypatch.setattr(d, "_models_cache", {url: (time.time(), [{"id": "kimi-k3"}], None)})
     out = d.list_models("kimi")
     assert out["provider"] == "kimi"
     assert out["listed"] is True

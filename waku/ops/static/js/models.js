@@ -215,7 +215,9 @@ async function loadAddModels(provider){
   }).join("");
   if (msg) msg.innerHTML = data.listed
     ? `${ms.length} models on <b>${esc(provider)}</b>. Choose one and Add — or star models in the catalog below.`
-    : `No live catalog for <b>${esc(provider)}</b> (only its defaults shown). Set its API key to list more.`;
+    : data.error
+      ? `Couldn't list <b>${esc(provider)}</b>: <span style="color:var(--bad)">${esc(data.error)}</span> — showing its defaults only.`
+      : `No live catalog for <b>${esc(provider)}</b> (only its defaults shown). Set its API key to list more.`;
 }
 
 async function addPinnedModel(){

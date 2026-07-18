@@ -184,11 +184,87 @@ def chat_stream(message: str, emit) -> None:
         "model": agent.settings.model,   # which brain answered — shown per card
     })
 
+
+def _compare_one(message: str, spec: str) -> dict:
+    """Run ONE message through ONE model in a throwaway temp home (same isolation
+    as `make shootout`, so it never touches your real memory/calendar), and
+    return its receipts — reply, gate, tools, latency, tokens, cost. A broken
+    contestant returns an {error} dict; it never raises."""
+    import tempfile
+    import time
+
+    from waku.app import Waku
+    from waku.config import Settings
+
+    provider, _, model = spec.partition(":")
+    home = Path(tempfile.mkdtemp(prefix=f"compare-{provider}-"))
+    gate: dict = {}
+    try:
+        settings = Settings(provider=provider, model=model, small_model="",
+                            home=home, apple_calendar=False)
+        app = Waku(settings=settings)
+        t0 = time.perf_counter()
+        result = app.respond(message, source="compare",
+                             observer=lambda k, ev: gate.update(
+                                 decision=ev.get("decision"), reason=ev.get("reason"))
+                             if k == "gate" else None)
+        ms = int((time.perf_counter() - t0) * 1000)
+        tin = tout = 0
+        ledger = home / "usage.jsonl"
+        if ledger.exists():
+            for line in ledger.read_text().splitlines():
+                try:
+                    r = json.loads(line)
+                    tin, tout = tin + r.get("in", 0), tout + r.get("out", 0)
+                except json.JSONDecodeError:
+                    pass
+        pin, pout = price_for(provider, settings.model)
+        return {"spec": spec, "provider": provider, "model": settings.model, "reply": result.reply,
+                "gate": (gate or None), "iterations": result.iterations, "latency_ms": ms,
+                "tools": [{"tool": c["tool"]} for c in result.tool_calls],
+                "tokens_in": tin, "tokens_out": tout,
+                "cost_usd": round(tin / 1e6 * pin + tout / 1e6 * pout, 4)}
+    except Exception as exc:   # a broken contestant fails alone, not the whole race
+        return {"spec": spec, "provider": provider, "model": model, "error": str(exc)[:200]}
+
+
+def compare_models(payload: dict) -> dict:
+    """Race ONE message through several models AT ONCE (parallel threads) and
+    return every result together. Non-streaming; the dashboard uses the SSE
+    version so columns fill in as each finishes."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    message = (payload.get("message") or "").strip()
+    specs = payload.get("models") or []
+    if not message or not specs:
+        return {"error": "message and models required"}
+    with ThreadPoolExecutor(max_workers=min(len(specs), 6)) as ex:
+        results = list(ex.map(lambda s: _compare_one(message, s), specs))
+    return {"ok": True, "message": message, "results": results}
+
+
+def compare_stream(message: str, specs: list, emit) -> None:
+    """Same race, but emit each model's result the MOMENT it finishes so the
+    dashboard fills columns progressively — a slow or broken contestant (e.g. a
+    keyless provider) never blocks the rest from showing."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    if not message or not specs:
+        emit("done", {"error": "message and models required"})
+        return
+    with ThreadPoolExecutor(max_workers=min(len(specs), 6)) as ex:
+        futs = [ex.submit(_compare_one, message, s) for s in specs]
+        for fut in as_completed(futs):
+            emit("result", fut.result())
+    emit("done", {})
+
+
 # Rough $/million tokens (in, out) for a dollar ESTIMATE — the number humans
 # actually feel. Keyed by provider; deliberately approximate and labelled "est".
 PRICING = {
     "anthropic": (3.0, 15.0), "openai": (2.5, 15.0), "gemini": (0.3, 2.5),
     "deepseek": (0.435, 0.87), "minimax": (0.30, 1.20), "kimi": (0.6, 2.5), "glm": (0.6, 2.2),
+    "xai": (3.0, 15.0),   # Grok — rough est; keyed users get exact from the catalog
     # openrouter fallback for paid models when the live catalog is unreachable
     # (rough mid-catalog guess). ":free" ids and catalog-priced models never
     # hit this: see price_for().
@@ -851,7 +927,11 @@ def list_models(provider: str | None = None) -> dict:
 
     cached = _models_cache.get(url)
     if cached and time.time() - cached[0] < 300:
-        return {**out, "listed": True, "models": cached[1]}
+        _ts, cmodels, cerr = cached          # cerr None on a real listing
+        r = {**out, "listed": cerr is None, "models": cmodels}
+        if cerr:
+            r["error"] = cerr
+        return r
     # Use this provider's own key; s.api_key only holds the ACTIVE provider's.
     key = (s.api_key if name == s.provider else "") or os.getenv(prov.key_env, "")
     # send both auth styles — Bearer for OpenAI-compatible catalogs, x-api-key +
@@ -864,10 +944,20 @@ def list_models(provider: str | None = None) -> dict:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
     except Exception as exc:
-        # cache the failure for ~1 minute so an unreachable catalog doesn't
-        # stall every 5-second dashboard poll for 10s
-        _models_cache[url] = (time.time() - 240, [])
-        return {**out, "listed": False, "models": [], "error": str(exc)}
+        # Surface the server's actual reason (e.g. xAI's 403 "no credits"), not
+        # just "HTTP Error 403" — an HTTPError carries the body on .read().
+        msg = str(exc)
+        try:
+            msg = f"{msg} — {exc.read().decode()[:160]}"
+        except Exception:
+            pass
+        # still offer the provider's known defaults so the picker isn't empty
+        known = [{"id": m} for m in dict.fromkeys([prov.model, prov.small_model]) if m]
+        # cache the failure (defaults + reason) for ~1 minute so an unreachable
+        # catalog doesn't stall every 5-second dashboard poll for 10s — and so a
+        # cache hit still shows the defaults and the reason, not a blank list.
+        _models_cache[url] = (time.time() - 240, known, msg)
+        return {**out, "listed": False, "models": known, "error": msg}
     models = []
     for m in data.get("data", []):
         mid = m.get("id", "")
@@ -894,7 +984,7 @@ def list_models(provider: str | None = None) -> dict:
             pass
         models.append(entry)
     models.sort(key=lambda x: (not x["free"], x["tools"] is False, x["id"]))
-    _models_cache[url] = (time.time(), models)
+    _models_cache[url] = (time.time(), models, None)   # None error = a real listing
     return {**out, "listed": True, "models": models}
 
 
@@ -1174,8 +1264,28 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:  # surface as a terminal event, don't 500
                 emit("done", {"error": f"{type(exc).__name__}: {exc}"})
             return
+        # /api/compare/stream races several models, emitting each result as it lands.
+        if self.path == "/api/compare/stream":
+            payload = json.loads(self.rfile.read(length) or "{}")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+
+            def emit(kind, ev):
+                try:
+                    self.wfile.write(f"data: {json.dumps({'kind': kind, **ev}, default=str)}\n\n".encode())
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            try:
+                compare_stream((payload.get("message") or "").strip(), payload.get("models") or [], emit)
+            except Exception as exc:
+                emit("done", {"error": f"{type(exc).__name__}: {exc}"})
+            return
         routes = {"/api/chat": None, "/api/memory": memory_action, "/api/settings": apply_settings,
-                  "/api/query": run_query, "/api/session": session_action, "/api/pin": pin_action}
+                  "/api/query": run_query, "/api/session": session_action, "/api/pin": pin_action,
+                  "/api/compare": compare_models}
         if self.path not in routes:
             self.send_response(404)
             self.end_headers()

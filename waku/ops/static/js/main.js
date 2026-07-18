@@ -16,7 +16,7 @@ function render(){
   if (view === "overview"){
     // don't rebuild mid-animation or the glowing SVG gets wiped
     if (activeView !== "overview" || !animating){ document.getElementById("view").innerHTML = VIEWS.overview(D); }
-  } else if ((view === "memory" || view === "settings" || view === "database") && editing && !subChanged){
+  } else if ((view === "memory" || view === "settings" || view === "database" || view === "compare") && editing && !subChanged){
     // don't wipe an in-progress edit on the 5s refresh — but DO switch sub-tabs
   } else {
     editing = false;

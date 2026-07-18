@@ -56,11 +56,14 @@ PROVIDERS: dict[str, Provider] = {
                           "claude-sonnet-5", "claude-haiku-4-5-20251001",
                           catalog_url="https://api.anthropic.com/v1/models",
                           flagship="claude-opus-4-8", fast="claude-sonnet-5"),
-    # gpt-5.6 ships as luna/sol/terra variants (no bare "gpt-5.6"); sol is the
-    # flagship, luna the small/fast one. base_url is None (SDK default endpoint),
-    # so point the picker at OpenAI's catalog explicitly, like anthropic/kimi.
+    # The gpt-5.6 REASONING models (luna/sol/terra) can't use function tools on
+    # /v1/chat/completions (they need /v1/responses), so every Waku turn 400s on
+    # them. The non-reasoning "chat" line DOES call tools fine; gpt-5.3-chat-latest
+    # is the newest concrete one (preferred over the gpt-5-chat-latest alias so a
+    # benchmark is reproducible). gpt-4.1-mini is a cheap tool-capable gate.
+    # base_url is None (SDK default) so point the picker at OpenAI's catalog.
     "openai":    Provider("openai", "OPENAI_API_KEY", None,
-                          "gpt-5.6-sol", "gpt-5.6-luna",
+                          "gpt-5.3-chat-latest", "gpt-4.1-mini",
                           catalog_url="https://api.openai.com/v1/models"),
     # one key, every lab's models, and a $0 tier: the default models below are
     # free ids (":free" suffix). Rate-limited (~50 req/day without credits).
@@ -150,11 +153,16 @@ class OpenAICompatClient:
             elif message["role"] == "assistant":
                 # anthropic content blocks → assistant text + tool_calls
                 text = "".join(b.text for b in content if getattr(b, "type", "") == "text")
-                calls = [
-                    {"id": b.id, "type": "function",
-                     "function": {"name": b.name, "arguments": json.dumps(b.input)}}
-                    for b in content if getattr(b, "type", "") == "tool_use"
-                ]
+                calls = []
+                for b in content:
+                    if getattr(b, "type", "") != "tool_use":
+                        continue
+                    call = {"id": b.id, "type": "function",
+                            "function": {"name": b.name, "arguments": json.dumps(b.input)}}
+                    extra = getattr(b, "extra", None)   # Gemini thought_signature
+                    if extra:
+                        call["extra_content"] = extra
+                    calls.append(call)
                 entry: dict = {"role": "assistant", "content": text or None}
                 if calls:
                     entry["tool_calls"] = calls
@@ -214,6 +222,11 @@ class OpenAICompatClient:
             blocks.append(SimpleNamespace(
                 type="tool_use", id=call.id, name=call.function.name,
                 input=json.loads(call.function.arguments or "{}"),
+                # Gemini's thinking models attach a thought_signature here and
+                # REQUIRE it echoed back with the tool call next turn, else the
+                # follow-up 400s ("missing a thought_signature"). Carry it so
+                # _to_openai can put it back. None for every other provider.
+                extra=getattr(call, "extra_content", None),
             ))
         usage = getattr(response, "usage", None)
         return SimpleNamespace(

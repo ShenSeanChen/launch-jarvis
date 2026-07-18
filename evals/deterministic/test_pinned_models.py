@@ -88,6 +88,22 @@ def test_switching_provider_adopts_its_pinned_default(home, monkeypatch):
     assert info["model"] == "kimi-k3"          # adopted the pinned default, not gemini's model
 
 
+def test_pinned_are_grouped_by_provider_for_display(home):
+    """A model added later (e.g. claude-fable-5) should list WITH its provider's
+    other models, not stranded at the bottom — while each provider's default
+    (first pinned) stays on top."""
+    (home / "models.json").write_text(json.dumps({"pinned": [
+        "anthropic:claude-opus-4-8", "openai:gpt-5.3-chat-latest",
+        "anthropic:claude-fable-5", "openai:gpt-4.1-mini"]}))
+    rows = [(r["provider"], r["model"], r["default"]) for r in d.settings_info()["pinned"]]
+    assert rows == [
+        ("anthropic", "claude-opus-4-8", True),      # default stays first
+        ("anthropic", "claude-fable-5", False),      # grouped with anthropic, not stranded
+        ("openai", "gpt-5.3-chat-latest", True),
+        ("openai", "gpt-4.1-mini", False),
+    ]
+
+
 def test_no_pins_is_empty_not_error(home):
     info = d.settings_info()
     assert info["pinned"] == []

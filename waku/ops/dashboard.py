@@ -29,6 +29,7 @@ from pathlib import Path
 
 from waku.config import load_settings
 from waku.db import connect
+from waku.ops import compare_history
 
 PORT = 7777
 # The frontend lives in its own files (static/index.html + style.css + app.js),
@@ -244,19 +245,93 @@ def compare_models(payload: dict) -> dict:
 
 
 def compare_stream(message: str, specs: list, emit) -> None:
-    """Same race, but emit each model's result the MOMENT it finishes so the
-    dashboard fills columns progressively — a slow or broken contestant (e.g. a
-    keyless provider) never blocks the rest from showing."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    """Race the models and stream each one's harness LIVE — gate decision and
+    tool calls, per model — so every column plays out like the chat dock instead
+    of a static 'racing…'. Each contestant runs the REAL loop (tools included) in
+    its own isolated temp home, so it can create events / save notes / search
+    without touching your real data. Parallel threads share one SSE socket, so
+    emit() is serialized behind a lock; each event is tagged with its `spec` so
+    the browser routes it to the right column."""
+    import tempfile
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from waku.app import Waku
+    from waku.config import Settings
 
     if not message or not specs:
         emit("done", {"error": "message and models required"})
         return
+
+    lock = threading.Lock()
+    collected: list = []   # per-model results, saved to the compare history at the end
+
+    def send(kind, ev):
+        with lock:
+            emit(kind, ev)
+            if kind == "result":
+                collected.append(ev)
+
+    def run(spec):
+        provider, _, model = spec.partition(":")
+        send("start", {"spec": spec, "provider": provider, "model": model})
+        home = Path(tempfile.mkdtemp(prefix=f"compare-{provider}-"))
+        gate: dict = {}
+
+        # Stream the STRUCTURAL harness live (gate decision, tool calls) — these
+        # fire from the observer without stream=True. We deliberately DON'T
+        # token-stream the reply: stream=True makes some reasoning models (gemini
+        # with tools) demand a thought_signature and 400, which the plain path
+        # doesn't. So the harness plays out live and the reply lands on finish.
+        def obs(kind, ev):
+            if kind == "gate":
+                gate.update(decision=ev.get("decision"), reason=ev.get("reason"))
+                send("gate", {"spec": spec, "decision": ev.get("decision"), "reason": ev.get("reason")})
+            elif kind == "tool":
+                send("tool", {"spec": spec, "tool": ev.get("tool")})
+
+        try:
+            settings = Settings(provider=provider, model=model, small_model="",
+                                home=home, apple_calendar=False)
+            app = Waku(settings=settings)
+            t0 = time.perf_counter()
+            result = app.respond(message, source="compare", observer=obs)
+            ms = int((time.perf_counter() - t0) * 1000)
+            tin = tout = 0
+            ledger = home / "usage.jsonl"
+            if ledger.exists():
+                for line in ledger.read_text().splitlines():
+                    try:
+                        r = json.loads(line)
+                        tin, tout = tin + r.get("in", 0), tout + r.get("out", 0)
+                    except json.JSONDecodeError:
+                        pass
+            pin, pout = price_for(provider, settings.model)
+            cost = round(tin / 1e6 * pin + tout / 1e6 * pout, 4)
+            send("result", {"spec": spec, "provider": provider, "model": settings.model,
+                            "reply": result.reply, "gate": (gate or None),
+                            "iterations": result.iterations, "latency_ms": ms,
+                            "tools": [{"tool": c["tool"]} for c in result.tool_calls],
+                            "tokens_in": tin, "tokens_out": tout, "cost_usd": cost})
+        except Exception as exc:
+            send("result", {"spec": spec, "provider": provider, "model": model, "error": str(exc)[:200]})
+
     with ThreadPoolExecutor(max_workers=min(len(specs), 6)) as ex:
-        futs = [ex.submit(_compare_one, message, s) for s in specs]
-        for fut in as_completed(futs):
-            emit("result", fut.result())
+        list(ex.map(run, specs))
+    # Persist the race to the arena's own history (never the agent's real state).
+    try:
+        compare_history.append_run(load_settings().home, message, collected)
+    except Exception:
+        pass   # a history-write hiccup must never fail the race
     emit("done", {})
+
+
+def compare_clear(payload: dict) -> dict:
+    """Wipe the Compare scoreboard/history (the Clear button). Only the arena's
+    own log; nothing else is touched."""
+    compare_history.clear(load_settings().home)
+    return {"ok": True, "runs": [], "aggregate": []}
 
 
 # Rough $/million tokens (in, out) for a dollar ESTIMATE — the number humans
@@ -1066,6 +1141,15 @@ def settings_info() -> dict:
         if m:
             pinned.append({"provider": p, "model": m, "default": p not in seen})
             seen.add(p)
+    # Group by provider for display (so all of one lab's models sit together,
+    # e.g. a late-added claude-fable-5 joins the other anthropic rows). A STABLE
+    # sort by provider's first-appearance order keeps each provider's own order —
+    # so its default (first pinned) stays on top and the 'default' flags above
+    # still line up.
+    prov_order: dict = {}
+    for row in pinned:
+        prov_order.setdefault(row["provider"], len(prov_order))
+    pinned.sort(key=lambda row: prov_order[row["provider"]])
     return {
         "provider": s.provider,
         "model": s.model or (prov.model if prov else ""),
@@ -1201,6 +1285,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 — http.server API
         if self.path == "/api/data":
             self._send(json.dumps(collect(), default=str).encode(), "application/json")
+        elif self.path == "/api/compare/history":
+            home = load_settings().home
+            runs = compare_history.load_runs(home)
+            self._send(json.dumps({"runs": runs[-20:][::-1],   # newest first for display
+                                   "aggregate": compare_history.aggregate(runs)}).encode(),
+                       "application/json")
         elif self.path.startswith("/api/models"):
             from urllib.parse import parse_qs, urlparse
 
@@ -1285,7 +1375,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         routes = {"/api/chat": None, "/api/memory": memory_action, "/api/settings": apply_settings,
                   "/api/query": run_query, "/api/session": session_action, "/api/pin": pin_action,
-                  "/api/compare": compare_models}
+                  "/api/compare": compare_models, "/api/compare/clear": compare_clear}
         if self.path not in routes:
             self.send_response(404)
             self.end_headers()

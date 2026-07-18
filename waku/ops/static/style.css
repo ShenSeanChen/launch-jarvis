@@ -312,17 +312,29 @@
   .cmp-input{width:100%;background:var(--bg);border:1px solid var(--line2);border-radius:8px;
        padding:10px 12px;color:var(--ink);font-size:13.5px;font-family:inherit;outline:none;resize:vertical}
   .cmp-input:focus{border-color:var(--accent)}
-  .cmp-picks{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .cmp-picks{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:center}
   .cmp-pick{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--ink2);
        border:1px solid var(--line2);border-radius:99px;padding:4px 10px;cursor:pointer}
   .cmp-pick.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
   .cmp-pick input{margin:0}
-  .cmp-grid{display:flex;gap:12px;margin-top:12px;overflow-x:auto;padding-bottom:6px;align-items:stretch}
-  .cmp-col{flex:0 0 300px;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  /* Responsive: as many ~300px columns as fit, then wrap to the next row. */
+  .cmp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
+       gap:12px;margin-top:12px;align-items:start}
+  .cmp-col{background:var(--panel);border:1px solid var(--line);border-radius:12px;
        padding:12px 14px;display:flex;flex-direction:column;gap:8px}
   .cmp-col.err{border-color:var(--bad)}
   .cmp-h{display:flex;align-items:center;gap:6px;font-size:13px}
   .cmp-stats{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
   .chip{font-size:11px;color:var(--ink2);border:1px solid var(--line2);border-radius:99px;padding:1px 8px}
   .chip.money{color:var(--good);border-color:var(--good)}
+  .chip.sorted{color:var(--accent);border-color:var(--accent);background:var(--accent-soft);font-weight:600}
   .cmp-reply{margin-top:2px;font-size:13px;max-height:340px;overflow-y:auto}
+  .cmp-race{padding:5px 14px;font-size:12.5px}
+  .cmp-th{cursor:pointer;white-space:nowrap}
+  .cmp-th:hover{color:var(--ink)}
+  .cmp-th.on{color:var(--accent)}
+  .cmp-sortbar{display:flex;align-items:center;gap:6px;margin:2px 0 12px;font-size:12px;color:var(--ink3)}
+  .cmp-sortbtn{cursor:pointer;font-size:12px;color:var(--ink2);background:var(--bg);
+       border:1px solid var(--line2);border-radius:99px;padding:3px 12px}
+  .cmp-sortbtn:hover{border-color:var(--accent);color:var(--accent)}
+  .cmp-sortbtn.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);font-weight:600}

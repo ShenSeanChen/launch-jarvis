@@ -64,9 +64,7 @@ class NotionEpisodeStore:
         keywords = [word.lower() for word in fts.split(" OR ")]
         matches = []
         for page in self._query_all():
-            summary = self._extract_rich_text(
-                page.get("properties", {}).get("Summary", {})
-            )
+            summary = self._extract_rich_text(page.get("properties", {}).get("Summary", {}))
             if any(keyword in summary.lower() for keyword in keywords):
                 matches.append(page)
 
@@ -97,13 +95,10 @@ class NotionEpisodeStore:
 
     @staticmethod
     def _extract_title(prop: dict) -> str:
-        return "".join(
-            part.get("text", {}).get("content", "") for part in prop.get("title", [])
-        )
+        return "".join(part.get("text", {}).get("content", "") for part in prop.get("title", []))
 
     @staticmethod
     def _extract_rich_text(prop: dict) -> str:
         return "".join(
-            part.get("text", {}).get("content", "")
-            for part in prop.get("rich_text", [])
+            part.get("text", {}).get("content", "") for part in prop.get("rich_text", [])
         )

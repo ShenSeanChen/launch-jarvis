@@ -41,7 +41,9 @@ def _install_fake_notion_client() -> None:
 # Install the fake module before importing the adapter under test.
 _install_fake_notion_client()
 
-from waku.memory.episodic.notion_store import NotionEpisodeStore
+from waku.memory.episodic.notion_store import (  # noqa: E402
+    NotionEpisodeStore,
+)
 
 
 def test_add_creates_page_with_correct_properties():

@@ -31,7 +31,7 @@ class Memory:
         self.settings = settings
         self.client = client
         self.facts = self._make_fact_store(conn, settings)
-        self.episodes = SqliteEpisodeStore(conn)
+        self.episodes = self._make_episode_store(conn, settings)
         self.skills = SkillLoader([REPO_SKILLS, settings.home / "skills"])
 
     @staticmethod
@@ -41,6 +41,14 @@ class Memory:
 
             return SupabaseFactStore(settings)
         return SqliteFactStore(conn)
+
+    @staticmethod
+    def _make_episode_store(conn, settings):
+        if settings.episodic_store == "notion":
+            from waku.memory.episodic.notion_store import NotionEpisodeStore
+
+            return NotionEpisodeStore()
+        return SqliteEpisodeStore(conn)
 
     # ---- retrieval (gated — see retrieval_gate.py for why)
     def gated_retrieve(self, message: str, notify=None) -> str:

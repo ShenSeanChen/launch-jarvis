@@ -6,9 +6,22 @@
 // compare_models in dashboard.py) — this is a benchmark, not a conversation, so
 // nothing here touches your real memory or calendar.
 
-// State survives the 5s refresh redraw (the view rebuilds from here).
+// State survives the 5s refresh redraw (the view rebuilds from here) AND — via
+// localStorage — tab switches and full reloads, so a finished race isn't lost.
+// Kept out of the chat log on purpose: a benchmark isn't a conversation.
 let compareState = { message: "Build a Kanto team around Pikachu — search current picks, remember it, and schedule two training sessions this week.",
-                     picked: null, running: false, results: null };
+                     picked: null, running: false, results: null, order: null };
+try {
+  const saved = JSON.parse(localStorage.getItem("waku_compare") || "null");
+  if (saved){ compareState.message = saved.message ?? compareState.message;
+              compareState.results = saved.results || null;
+              // only restore columns that actually finished (drop any stale racing… ones)
+              compareState.order = (saved.order || []).filter(s => saved.results && saved.results[s]); }
+} catch(e){}
+function saveCompare(){
+  try { localStorage.setItem("waku_compare", JSON.stringify({
+    message: compareState.message, order: compareState.order, results: compareState.results})); } catch(e){}
+}
 
 // Which models are offered: your pinned shortlist (models.json). Default-pick
 // the first (flagship) of each provider so the race is one brain per lab.
@@ -64,12 +77,12 @@ async function runCompare(){
         if (ev.kind === "start"){ R[s] = {spec:s, provider:ev.provider, model:ev.model, streaming:true, tools:[], gate:null}; render(); }
         else if (ev.kind === "gate" && R[s]){ R[s].gate = {decision:ev.decision, reason:ev.reason}; render(); }
         else if (ev.kind === "tool" && R[s]){ (R[s].tools = R[s].tools||[]).push({tool:ev.tool}); render(); }
-        else if (ev.kind === "result" && s){ R[s] = ev; render(); }
+        else if (ev.kind === "result" && s){ R[s] = ev; saveCompare(); render(); }
         else if (ev.kind === "done"){ if (ev.error) compareState.raceError = ev.error; }
       }
     }
   } catch(e){ compareState.raceError = String(e); }
-  compareState.running = false; render();
+  compareState.running = false; saveCompare(); render();
 }
 
 // One contestant's column. While the model runs (res.streaming) it plays out

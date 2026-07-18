@@ -333,6 +333,13 @@
   .cmp-th{cursor:pointer;white-space:nowrap}
   .cmp-th:hover{color:var(--ink)}
   .cmp-th.on{color:var(--accent)}
+  .cmp-score{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;
+    font-weight:600;letter-spacing:.02em;white-space:nowrap;vertical-align:middle}
+  .cmp-score.pass{background:var(--good-soft);color:var(--good)}
+  .cmp-score.fail{background:var(--bad-soft);color:var(--bad)}
+  .cmp-score.part{background:#c8951f22;color:#c8951f}
+  .cmp-col.solved{box-shadow:inset 3px 0 0 var(--good)}
+  .cmp-col.failed{box-shadow:inset 3px 0 0 var(--bad)}
   .cmp-sortbar{display:flex;align-items:center;gap:6px;margin:2px 0 12px;font-size:12px;color:var(--ink3)}
   .cmp-sortbtn{cursor:pointer;font-size:12px;color:var(--ink2);background:var(--bg);
        border:1px solid var(--line2);border-radius:99px;padding:3px 12px}

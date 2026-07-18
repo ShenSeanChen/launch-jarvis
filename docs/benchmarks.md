@@ -272,6 +272,10 @@ scoring, a cross-model CLI (`shootout.py`), a judge harness, and a live arena fo
 Speed/Cost/Tokens.
 
 **What's still owed (the gap this doc names):**
-- Completion + Quality columns wired into the live arena scoreboard.
-- Battery sections B (coding via `delegate_task`) and the hard A-cases seeded.
+- ~~Completion column wired into the live arena~~ — **done**: a race on a known
+  battery case now scores each column live (green "solved" / red "failed · why"
+  badge + a "solved" scoreboard column), via the one scorer in
+  [`waku/ops/scoring.py`](../waku/ops/scoring.py) shared with `shootout.py`.
+- Quality column (K3-as-judge) wired into the arena.
+- Battery section B (coding via `delegate_task`) + cross-model pi.
 - A cost-vs-quality visualization (§1) — the Pareto view, not just a table.

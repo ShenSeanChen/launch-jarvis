@@ -35,27 +35,9 @@ sys.path.insert(0, str(REPO))
 
 from waku.config import Settings, load_settings  # noqa: E402  (loads .env keys)
 from waku.ops.dashboard import price_for  # noqa: E402
+from waku.ops.scoring import check_case, load_cases  # noqa: E402  (the ONE scorer)
 
-DATASET = [json.loads(line) for line in (REPO / "evals" / "dataset.jsonl").read_text().splitlines()
-           if line.strip()]
-
-
-def check_case(case: dict, tool_calls: list[dict]) -> tuple[bool, str]:
-    """The same deterministic contract as evals' live tier: right tool, right
-    args, and (for multi-tool cases) enough of the loop actually ran."""
-    fired = [c["tool"] for c in tool_calls]
-    if case["expect_tool"] is None:
-        return (not fired, "no tool expected" if not fired else f"called {fired}")
-    if case["expect_tool"] not in fired:
-        return (False, f"expected {case['expect_tool']}, called {fired or 'nothing'}")
-    args = next(c["args"] for c in tool_calls if c["tool"] == case["expect_tool"])
-    for key, needle in case.get("expect_in_args", {}).items():
-        if needle.lower() not in str(args.get(key, "")).lower():
-            return (False, f"'{needle}' not in args[{key}]")
-    want = case.get("expect_min_tool_calls", 0)
-    if len(fired) < want:
-        return (False, f"only {len(fired)} tool calls, wanted >= {want}")
-    return (True, "ok")
+DATASET = load_cases()
 
 
 def _ledger_totals(home: Path) -> tuple[int, int]:

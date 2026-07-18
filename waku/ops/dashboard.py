@@ -29,7 +29,7 @@ from pathlib import Path
 
 from waku.config import load_settings
 from waku.db import connect
-from waku.ops import compare_history
+from waku.ops import compare_history, scoring
 
 PORT = 7777
 # The frontend lives in its own files (static/index.html + style.css + app.js),
@@ -266,6 +266,10 @@ def compare_stream(message: str, specs: list, emit) -> None:
 
     lock = threading.Lock()
     collected: list = []   # per-model results, saved to the compare history at the end
+    # If this prompt is a known battery case, every column gets a deterministic
+    # Completion score (did the right tool fire, with the right args, enough
+    # times). Free-form prompts still race — they just don't get a score.
+    case = scoring.case_for_message(message)
 
     def send(kind, ev):
         with lock:
@@ -295,6 +299,10 @@ def compare_stream(message: str, specs: list, emit) -> None:
             settings = Settings(provider=provider, model=model, small_model="",
                                 home=home, apple_calendar=False)
             app = Waku(settings=settings)
+            # A scored case may pre-load a fact (e.g. "applies memory") so every
+            # model starts from the same state the checklist assumes.
+            if case and case.get("setup_fact"):
+                app.memory.facts.add(case["setup_fact"]["subject"], case["setup_fact"]["content"])
             t0 = time.perf_counter()
             result = app.respond(message, source="compare", observer=obs)
             ms = int((time.perf_counter() - t0) * 1000)
@@ -309,11 +317,16 @@ def compare_stream(message: str, specs: list, emit) -> None:
                         pass
             pin, pout = price_for(provider, settings.model)
             cost = round(tin / 1e6 * pin + tout / 1e6 * pout, 4)
+            completion = None
+            if case:
+                passed, why = scoring.check_case(case, result.tool_calls)
+                completion = {"passed": passed, "why": why, "case": case["id"]}
             send("result", {"spec": spec, "provider": provider, "model": settings.model,
                             "reply": result.reply, "gate": (gate or None),
                             "iterations": result.iterations, "latency_ms": ms,
                             "tools": [{"tool": c["tool"]} for c in result.tool_calls],
-                            "tokens_in": tin, "tokens_out": tout, "cost_usd": cost})
+                            "tokens_in": tin, "tokens_out": tout, "cost_usd": cost,
+                            "completion": completion})
         except Exception as exc:
             send("result", {"spec": spec, "provider": provider, "model": model, "error": str(exc)[:200]})
 

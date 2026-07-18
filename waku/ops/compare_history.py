@@ -47,6 +47,7 @@ def _slim(r: dict) -> dict:
         "gate": gate.get("decision") if isinstance(gate, dict) else gate,
         "tools": [t.get("tool") for t in (r.get("tools") or [])],
         "error": r.get("error"),
+        "completion": r.get("completion"),   # {passed, why, case} on a scored case, else None
         "reply": (r.get("reply") or "")[:REPLY_CAP],
     }
 
@@ -103,7 +104,8 @@ def aggregate(runs: list[dict]) -> list[dict]:
             spec = r.get("spec") or f"{r.get('provider')}:{r.get('model')}"
             a = acc.setdefault(spec, {"spec": spec, "provider": r.get("provider"),
                                       "model": r.get("model"), "runs": 0, "ok": 0,
-                                      "lat": 0, "tin": 0, "tout": 0, "cost": 0.0})
+                                      "lat": 0, "tin": 0, "tout": 0, "cost": 0.0,
+                                      "passed": 0, "scored": 0})
             a["runs"] += 1
             if not r.get("error"):
                 a["ok"] += 1
@@ -111,10 +113,16 @@ def aggregate(runs: list[dict]) -> list[dict]:
                 a["tin"] += r.get("tokens_in") or 0
                 a["tout"] += r.get("tokens_out") or 0
                 a["cost"] += r.get("cost_usd") or 0.0
+            # Completion: only races on a KNOWN battery case carry a verdict.
+            c = r.get("completion")
+            if c is not None:
+                a["scored"] += 1
+                a["passed"] += 1 if c.get("passed") else 0
     out = [{"spec": a["spec"], "provider": a["provider"], "model": a["model"],
             "runs": a["runs"], "ok": a["ok"], "total_latency_ms": a["lat"],
             "total_tokens_in": a["tin"], "total_tokens_out": a["tout"],
             "total_tokens": a["tin"] + a["tout"],  # kept for back-compat / sorting
+            "cases_passed": a["passed"], "cases_scored": a["scored"],
             "total_cost_usd": round(a["cost"], 4)} for a in acc.values()]
     out.sort(key=lambda x: x["total_cost_usd"])
     return out

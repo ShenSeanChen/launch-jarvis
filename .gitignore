@@ -13,3 +13,4 @@ dist/
 .waku.bak-*/
 .waku.prerename-bak/
 .env.prerename-bak
+uv.lock

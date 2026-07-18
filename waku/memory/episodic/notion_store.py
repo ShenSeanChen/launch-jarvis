@@ -4,7 +4,7 @@ Each episode becomes a page in a database with two properties:
 - Name (title): the ISO-8601 timestamp string (happened_at)
 - Summary (rich_text): the episode summary
 
-Install with the [notion] extra:
+Install with the [notion] extra (notion-client >= 2.5, data-sources API):
     pip install 'waku-agent[notion]'
 
 Set environment variables:
@@ -34,11 +34,21 @@ class NotionEpisodeStore:
                 "NOTION_EPISODES_DATABASE_ID environment variable"
             )
         self.client = Client(auth=self.token)
+        # notion-client >= 2.5 (Notion API 2025-09-03): rows live under a
+        # database's data source, so resolve database_id -> data_source_id once.
+        sources = self.client.databases.retrieve(database_id=self.database_id).get(
+            "data_sources"
+        ) or []
+        if not sources:
+            raise ValueError(
+                f"Notion database {self.database_id} has no data sources to query"
+            )
+        self.data_source_id = sources[0]["id"]
 
     def add(self, summary: str, happened_at: str) -> None:
         """Create a new episode page in the configured Notion database."""
         self.client.pages.create(
-            parent={"database_id": self.database_id},
+            parent={"data_source_id": self.data_source_id},
             properties={
                 "Name": {"title": [{"text": {"content": happened_at}}]},
                 "Summary": {"rich_text": [{"text": {"content": summary}}]},
@@ -108,11 +118,11 @@ class NotionEpisodeStore:
     def _query_all(self) -> list[dict]:
         """Fetch all pages from the database, following pagination."""
         results: list[dict] = []
-        response = self.client.databases.query(database_id=self.database_id)
+        response = self.client.data_sources.query(data_source_id=self.data_source_id)
         results.extend(response.get("results", []))
         while response.get("has_more"):
-            response = self.client.databases.query(
-                database_id=self.database_id,
+            response = self.client.data_sources.query(
+                data_source_id=self.data_source_id,
                 start_cursor=response.get("next_cursor"),
             )
             results.extend(response.get("results", []))

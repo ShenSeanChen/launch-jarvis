@@ -13,14 +13,19 @@ import pytest
 
 
 class _FakeNotionClient:
-    """In-memory fake for notion_client.Client."""
+    """In-memory fake for notion_client.Client (>= 2.5, data-sources API)."""
 
     def __init__(self, auth: str | None = None) -> None:
         self.auth = auth
-        self.databases = types.SimpleNamespace(query=self._query)
+        self.databases = types.SimpleNamespace(retrieve=self._retrieve)
+        self.data_sources = types.SimpleNamespace(query=self._query)
         self.pages = types.SimpleNamespace(create=self._create, update=self._update)
         self._pages: list[dict] = []
         self._created_count = 0
+
+    def _retrieve(self, *, database_id: str) -> dict:
+        assert database_id == "test-db-id"
+        return {"data_sources": [{"id": "test-ds-id"}]}
 
     def _create(self, *, parent: dict, properties: dict) -> dict:
         self._created_count += 1
@@ -40,8 +45,8 @@ class _FakeNotionClient:
                 return page
         return {}
 
-    def _query(self, *, database_id: str, start_cursor: str | None = None) -> dict:
-        assert database_id == "test-db-id"
+    def _query(self, *, data_source_id: str, start_cursor: str | None = None) -> dict:
+        assert data_source_id == "test-ds-id"
         return {"results": list(self._pages), "has_more": False}
 
 
@@ -62,7 +67,7 @@ def test_add_creates_page_with_correct_properties(store):
     store.add("planned the demo with Alex", "2026-07-10")
 
     created = store.client._pages[0]
-    assert created["parent"]["database_id"] == "test-db-id"
+    assert created["parent"]["data_source_id"] == "test-ds-id"
     title_parts = created["properties"]["Name"]["title"]
     assert title_parts[0]["text"]["content"] == "2026-07-10"
     summary_parts = created["properties"]["Summary"]["rich_text"]
@@ -143,6 +148,9 @@ def test_constructor_requires_token_and_database_id(monkeypatch):
     fake_module = types.ModuleType("notion_client")
     fake_module.Client = _FakeNotionClient
     monkeypatch.setitem(sys.modules, "notion_client", fake_module)
+    # Isolate from a developer's real .env, which may set these.
+    monkeypatch.delenv("NOTION_TOKEN", raising=False)
+    monkeypatch.delenv("NOTION_EPISODES_DATABASE_ID", raising=False)
 
     with pytest.raises(ValueError, match="NOTION_TOKEN"):
         NotionEpisodeStore(token=None, database_id="test-db-id")

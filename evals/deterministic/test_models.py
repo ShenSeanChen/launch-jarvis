@@ -29,8 +29,8 @@ def test_openai_default_is_tool_capable(tmp_path):
     variants (luna/sol/terra) can't use function tools on /v1/chat/completions
     (they 400). The default must be a NON-reasoning, tool-capable chat model."""
     from waku.loop.models import PROVIDERS
-    assert PROVIDERS["openai"].model == "gpt-5-chat-latest"
-    assert PROVIDERS["openai"].default_pair() == ["gpt-5-chat-latest", "gpt-4.1-mini"]
+    assert PROVIDERS["openai"].model == "gpt-5.3-chat-latest"
+    assert PROVIDERS["openai"].default_pair() == ["gpt-5.3-chat-latest", "gpt-4.1-mini"]
 
 
 def test_gemini_thought_signature_round_trips():

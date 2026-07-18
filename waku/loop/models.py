@@ -58,11 +58,12 @@ PROVIDERS: dict[str, Provider] = {
                           flagship="claude-opus-4-8", fast="claude-sonnet-5"),
     # The gpt-5.6 REASONING models (luna/sol/terra) can't use function tools on
     # /v1/chat/completions (they need /v1/responses), so every Waku turn 400s on
-    # them. gpt-5-chat-latest is the newest NON-reasoning chat model and calls
-    # tools fine here; gpt-4.1-mini is a cheap tool-capable gate. base_url is None
-    # (SDK default endpoint) so point the picker at OpenAI's catalog explicitly.
+    # them. The non-reasoning "chat" line DOES call tools fine; gpt-5.3-chat-latest
+    # is the newest concrete one (preferred over the gpt-5-chat-latest alias so a
+    # benchmark is reproducible). gpt-4.1-mini is a cheap tool-capable gate.
+    # base_url is None (SDK default) so point the picker at OpenAI's catalog.
     "openai":    Provider("openai", "OPENAI_API_KEY", None,
-                          "gpt-5-chat-latest", "gpt-4.1-mini",
+                          "gpt-5.3-chat-latest", "gpt-4.1-mini",
                           catalog_url="https://api.openai.com/v1/models"),
     # one key, every lab's models, and a $0 tier: the default models below are
     # free ids (":free" suffix). Rate-limited (~50 req/day without credits).

@@ -326,21 +326,15 @@ def compare_stream(message: str, specs: list, emit, judge: bool = False,
             if case:
                 passed, why = scoring.check_case(case, result.tool_calls)
                 completion = {"passed": passed, "why": why, "case": case["id"]}
-            # Quality: the referee grades the reply 0-10 when judging is on (own
-            # API call, so it's opt-in per race). The referee is switchable and
-            # should NOT be a racing model. A judge hiccup returns None.
-            quality = None
-            if judge:
-                jp, _, jm = (judge_spec or "").partition(":")
-                quality = judge_mod.judge_reply(message, result.reply,
-                                                jp or None, jm or None,
-                                                tools=[c["tool"] for c in result.tool_calls])
+            # Quality (referee grade) is NOT done here — it runs as one controlled
+            # pass AFTER every column finishes (see below), so the referee doesn't
+            # get a burst of concurrent calls and skip some.
             send("result", {"spec": spec, "provider": provider, "model": settings.model,
                             "reply": result.reply, "gate": (gate or None),
                             "iterations": result.iterations, "latency_ms": ms,
                             "tools": [{"tool": c["tool"]} for c in result.tool_calls],
                             "tokens_in": tin, "tokens_out": tout, "cost_usd": cost,
-                            "completion": completion, "quality": quality})
+                            "completion": completion, "quality": None})
         except (Exception, SystemExit) as exc:
             # SystemExit (not an Exception subclass) is what get_client raises for
             # a missing/misconfigured key. Catch it too, or a keyless provider
@@ -349,6 +343,28 @@ def compare_stream(message: str, specs: list, emit, judge: bool = False,
 
     with ThreadPoolExecutor(max_workers=min(len(specs), 6)) as ex:
         list(ex.map(run, specs))
+
+    # Grade AFTER the race, as one gentle pass — so the referee gets a steady
+    # trickle of calls (max_workers=2) instead of a burst the moment every column
+    # finishes, which used to 429 and leave some models ungraded. Each grade
+    # updates its card ("grade" event) and the stored result, so history + the
+    # scoreboard end up with every model scored.
+    if judge:
+        jp, _, jm = (judge_spec or "").partition(":")
+        gradable = [r for r in collected if not r.get("error") and (r.get("reply") or "").strip()]
+        emit("grading", {"n": len(gradable), "judge": jm or judge_mod.JUDGE_MODEL})
+
+        def grade(r):
+            if r.get("error") or not (r.get("reply") or "").strip():
+                return
+            q = judge_mod.judge_reply(message, r["reply"], jp or None, jm or None,
+                                      tools=[t.get("tool") for t in (r.get("tools") or [])])
+            r["quality"] = q                       # fold into what gets persisted
+            send("grade", {"spec": r.get("spec"), "quality": q})
+
+        with ThreadPoolExecutor(max_workers=2) as jex:
+            list(jex.map(grade, list(collected)))
+
     # Persist the race to the arena's own history (never the agent's real state).
     try:
         compare_history.append_run(load_settings().home, message, collected)

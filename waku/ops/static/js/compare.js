@@ -132,6 +132,7 @@ async function runCompare(){
   compareState.order = specs;      // columns to show, in picked order
   compareState.results = {};       // spec -> result, filled as they land
   compareState.raceError = null;
+  compareState.grading = null;      // set during the post-race referee pass
   render();
   const R = compareState.results;
   try {
@@ -158,7 +159,9 @@ async function runCompare(){
         else if (ev.kind === "gate" && R[s]){ R[s].gate = {decision:ev.decision, reason:ev.reason}; render(); }
         else if (ev.kind === "tool" && R[s]){ (R[s].tools = R[s].tools||[]).push({tool:ev.tool}); render(); }
         else if (ev.kind === "result" && s){ R[s] = ev; saveCompare(); render(); }
-        else if (ev.kind === "done"){ if (ev.error) compareState.raceError = ev.error; }
+        else if (ev.kind === "grading"){ compareState.grading = ev; render(); }   // post-race referee pass begins
+        else if (ev.kind === "grade" && R[s]){ R[s].quality = ev.quality; if (compareState.grading) compareState.grading.done = (compareState.grading.done||0)+1; saveCompare(); render(); }
+        else if (ev.kind === "done"){ compareState.grading = null; if (ev.error) compareState.raceError = ev.error; }
       }
     }
   } catch(e){ compareState.raceError = String(e); }
@@ -257,9 +260,10 @@ VIEWS.compare = function(d){
       : ""}${clearBtn}</div>` : "";
     // Only a progress line while the race is still running; once every column is
     // in, the sort tabs + cards + scoreboard say it all (no redundant summary).
+    const g = compareState.grading;
     const summary = done.length < order.length
       ? `Racing ${order.length} models — ${done.length}/${order.length} done`
-      : "";
+      : (g ? `Referee ${esc(g.judge||"")} grading — ${g.done||0}/${g.n} scored` : "");
     // Rank finished models first (by the chosen metric), then still-running,
     // then errors — so as the race resolves, the best rises to the top-left.
     const rank = s => {

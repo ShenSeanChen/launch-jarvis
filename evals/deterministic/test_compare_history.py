@@ -7,8 +7,6 @@ contract: append + trim, isolation of the reply cap, and the aggregate math."""
 
 from __future__ import annotations
 
-import json
-
 from waku.ops import compare_history as ch
 
 

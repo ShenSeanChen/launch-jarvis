@@ -69,7 +69,8 @@ def run_coding_stream(provider: str, model: str, task: str, files: dict | None,
     prompt just runs, nothing to score)."""
     pi_bin = shutil.which("pi")
     if not pi_bin:
-        on_line("pi is not installed"); return (False, "pi not installed", 0.0)
+        on_line("pi is not installed")
+        return (False, "pi not installed", 0.0)
     pi_prov = PI_PROVIDER.get(provider)
     if not pi_prov:
         return (False, f"pi has no provider mapping for '{provider}'", 0.0)
@@ -111,7 +112,8 @@ def run_coding_stream(provider: str, model: str, task: str, files: dict | None,
         v = subprocess.run(verify, shell=True, cwd=workdir, capture_output=True,
                            text=True, timeout=120, check=False)
     except subprocess.TimeoutExpired:
-        on_line("[verify timed out]"); return (False, "verify timed out", secs)
+        on_line("[verify timed out]")
+        return (False, "verify timed out", secs)
     if v.returncode == 0:
         on_line("[verify] tests pass")
         return (True, "tests pass", secs)

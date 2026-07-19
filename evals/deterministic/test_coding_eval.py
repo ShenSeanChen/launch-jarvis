@@ -83,7 +83,7 @@ def test_stream_runner_scores_by_verify_and_emits_lines(tmp_path, monkeypatch):
         verify="python3 -c \"from fizzbuzz import fizzbuzz; assert fizzbuzz(15)=='FizzBuzz'\"",
         on_line=lines.append)
     assert passed is True and why == "tests pass"
-    assert any(l.startswith("$ pi") for l in lines)   # the launch line streamed
+    assert any(ln.startswith("$ pi") for ln in lines)   # the launch line streamed
 
 
 def test_stream_runner_free_form_has_no_verdict(tmp_path, monkeypatch):
@@ -91,5 +91,5 @@ def test_stream_runner_free_form_has_no_verdict(tmp_path, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
     passed, why, _ = ce.run_coding_stream("anthropic", "claude-opus-4-8",
                                           task="build snake", files=None, verify=None,
-                                          on_line=lambda l: None)
+                                          on_line=lambda _ln: None)
     assert passed is None            # nothing to score -> no pass/fail, it just ran

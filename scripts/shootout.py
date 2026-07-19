@@ -35,27 +35,9 @@ sys.path.insert(0, str(REPO))
 
 from waku.config import Settings, load_settings  # noqa: E402  (loads .env keys)
 from waku.ops.dashboard import price_for  # noqa: E402
+from waku.ops.scoring import check_case, load_cases  # noqa: E402  (the ONE scorer)
 
-DATASET = [json.loads(line) for line in (REPO / "evals" / "dataset.jsonl").read_text().splitlines()
-           if line.strip()]
-
-
-def check_case(case: dict, tool_calls: list[dict]) -> tuple[bool, str]:
-    """The same deterministic contract as evals' live tier: right tool, right
-    args, and (for multi-tool cases) enough of the loop actually ran."""
-    fired = [c["tool"] for c in tool_calls]
-    if case["expect_tool"] is None:
-        return (not fired, "no tool expected" if not fired else f"called {fired}")
-    if case["expect_tool"] not in fired:
-        return (False, f"expected {case['expect_tool']}, called {fired or 'nothing'}")
-    args = next(c["args"] for c in tool_calls if c["tool"] == case["expect_tool"])
-    for key, needle in case.get("expect_in_args", {}).items():
-        if needle.lower() not in str(args.get(key, "")).lower():
-            return (False, f"'{needle}' not in args[{key}]")
-    want = case.get("expect_min_tool_calls", 0)
-    if len(fired) < want:
-        return (False, f"only {len(fired)} tool calls, wanted >= {want}")
-    return (True, "ok")
+DATASET = load_cases()
 
 
 def _ledger_totals(home: Path) -> tuple[int, int]:
@@ -142,6 +124,30 @@ def markdown(results: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def coding_shootout(runs: list[str], cases: list[dict], trials: int) -> str:
+    """Cross-model CODING round: pi runs each contestant's model on each coding
+    task, scored by the task's `verify` command (tests pass = 1). Prints a table."""
+    from waku.ops.coding_eval import run_coding_case
+
+    lines = ["| brain | pass rate | avg latency | detail |", "|---|---|---|---|"]
+    for spec in runs:
+        provider, _, model = spec.partition(":")
+        print(f"\n=== coding · {provider}:{model or '(default)'} — {len(cases)} cases x {trials} ===")
+        hits = total = 0
+        lats, notes = [], []
+        for case in cases:
+            for _ in range(trials):
+                passed, why, secs = run_coding_case(provider, model, case)
+                hits += 1 if passed else 0
+                total += 1
+                lats.append(secs)
+                print(f"  [{'PASS' if passed else 'fail'}] {case['id']:16} {secs:6.1f}s  {why}")
+            notes.append(f"{case['id']}:{'ok' if passed else why[:24]}")
+        avg = round(sum(lats) / len(lats), 1) if lats else 0
+        lines.append(f"| {spec} | {hits}/{total} | {avg}s | {'; '.join(notes)} |")
+    return "\n".join(lines)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the same tasks on different brains.")
     parser.add_argument("runs", nargs="+", metavar="provider:model",
@@ -150,7 +156,29 @@ def main() -> None:
     parser.add_argument("--cases", default="", help="comma-separated case ids (default: all)")
     parser.add_argument("--trials", type=int, default=3,
                         help="attempts per case (default 3 — rates, not coin flips)")
+    parser.add_argument("--coding", action="store_true",
+                        help="run the CODING battery (evals/coding.jsonl) via pi per model, "
+                             "scored by each task's verify command")
     args = parser.parse_args()
+
+    if args.coding:
+        from waku.ops.coding_eval import load_coding_cases, pi_available
+        if not pi_available():
+            raise SystemExit("pi isn't installed — the coding battery needs it. "
+                             "Install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent")
+        wanted = [c.strip() for c in args.cases.split(",") if c.strip()]
+        cases = [c for c in load_coding_cases() if not wanted or c["id"] in wanted]
+        if not cases:
+            raise SystemExit(f"no coding cases match {wanted!r} — ids: "
+                             f"{[c['id'] for c in load_coding_cases()]}")
+        table = coding_shootout(args.runs, cases, args.trials)
+        print("\n" + table)
+        out_dir = load_settings().home / "shootout"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        (out_dir / f"coding-{stamp}.md").write_text(table + "\n")
+        print(f"\nreport: {out_dir}/coding-{stamp}.md")
+        return
 
     wanted = [c.strip() for c in args.cases.split(",") if c.strip()]
     cases = [c for c in DATASET if not wanted or c["id"] in wanted]

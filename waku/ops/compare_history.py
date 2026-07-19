@@ -65,10 +65,15 @@ def append_run(home: Path, message: str, results: list[dict], ts: str | None = N
     }
     runs = load_runs(home)
     runs.append(record)
-    runs = runs[-MAX_RUNS:]
+    save_runs(home, runs)
+
+
+def save_runs(home: Path, runs: list[dict]) -> None:
+    """Rewrite the (capped) history file — used by append_run and by re-grading,
+    which mutates an existing race's stored results in place."""
     path = _path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(r) for r in runs) + "\n")
+    path.write_text("\n".join(json.dumps(r) for r in runs[-MAX_RUNS:]) + "\n")
 
 
 def clear(home: Path) -> None:

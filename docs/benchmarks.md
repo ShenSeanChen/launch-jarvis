@@ -160,9 +160,27 @@ footing. Verified live: opus-4-8 and kimi-k3 both solve `code-fizzbuzz` (scored
 by real test execution). The scorer lives in
 [`waku/ops/coding_eval.py`](../waku/ops/coding_eval.py).
 
-**Still owed:** a coding column in the *live arena* (today it's the CLI table) —
-coding runs are multi-turn and slower than a chat turn, so they're a deliberate
-"coding round," and pi's token/cost aren't yet captured into the receipts.
+**In the live arena too — through the LOOP, not around it:** turn on the
+**"coding (pi)"** toggle and race. This registers `delegate_task` for the race,
+so each card runs the **full harness** (gate → memory → tools) and the model
+*decides* to call `delegate_task`, which spawns a pi sub-agent **on that card's
+own model** to write and run the code. It's autonomous — the loop runs
+model → delegate_task → model finalizes, no stopping to wait — and the card shows
+the real receipts: the gate badge, the `delegate_task` tool chip, tokens, and
+cost (the loop's own; pi's internal tokens aren't captured). A free-form prompt
+("build snake and run it") works because pi has a bash tool, so "run it" happens
+inside the delegated sub-agent. (Reasoning models are slow here — kimi-k3 as the
+loop brain + pi can take minutes; film 2-3 models.)
+
+**Where the code lands + auto-run:** a scratch coding task doesn't vanish in a
+temp dir — `delegate_task` saves it to a dated, self-documenting workspace
+(`./waku_workspace/<date>/<time>-<model>-<slug>/`, git-ignored) with a
+`MANIFEST.md` (date, model, task, files, run result), the files pi wrote, the pi
+transcript, and `run.log`. After pi finishes, the harness **auto-runs** the entry
+script (headless, captured, 30s timeout) and feeds the result back into the loop,
+so the model sees whether its own code actually ran. Config:
+`WAKU_WORKSPACE` (root), `WAKU_DELEGATE_AUTORUN=0` (disable), `WAKU_AUTORUN_TIMEOUT`.
+See [`waku/tools/workspace.py`](../waku/tools/workspace.py).
 
 ### C. Memory & context
 
@@ -210,19 +228,30 @@ the same way a normal loop does.
 
 ---
 
-## 5. The judge — K3 as neutral referee
+## 5. The judge — a switchable, neutral referee
 
-The Quality axis reuses the DeepEval judge in
-[`evals/judge/anthropic_judge.py`](../evals/judge/anthropic_judge.py), pointed at
-**kimi-k3**. It reads each column's transcript and returns a 0–10 score + a
-one-line reason against a rubric (did it address the ask, use tools sensibly, and
-stay honest about what it did).
+The Quality axis grades each reply 0–10 + a one-line reason via
+[`waku/ops/judge.py`](../waku/ops/judge.py). The referee is **switchable from the
+arena** (the dropdown next to the "grade" toggle) and defaults to **gpt-5.6-sol**.
 
-**The rule that keeps it fair:** the judge is never one of the contestants in the
-race it's grading. For the K3 sponsorship video the hook is inverted on purpose —
-K3 grades the whole field *including itself* — so we surface that explicitly ("K3
-is judging this round") rather than hide it. For unbiased internal numbers, run
-the judge as a model that isn't racing.
+**Why not K3 as the judge:** you can't test K3 with K3 as the grader — a
+contestant judging its own round isn't credible, and (we hit this live) K3 was
+also *racing*, so judging every column at once hammered its own endpoint and
+429'd, blanking most grades. The referee should be a model that **isn't racing**.
+gpt-5.6-sol is the natural pick: a strong reasoning model that makes a poor
+*contestant* here (it can't call tools on the chat endpoint) but a fine *judge*
+(grading is pure text). Any provider works — Waku's OpenAI-compat client gives
+the judge the same interface as the anthropic wire.
+
+**What the grade means (say this on camera):** 0–10 for how well the reply serves
+the request — correct, honest, concise. 9–10 fully addresses it; 5–8 minor gaps;
+0 hallucinates or claims an action it didn't take.
+
+**The fairness fix that matters:** the judge sees only the reply *text*, so a
+truthful "I saved that" looked like a hallucination and scored 0 even though
+`save_note` really fired. The judge is now handed the **list of tools that
+actually ran** as ground truth, so a real action backed by a real tool call
+scores correctly (verified: same reply → 0 without the tool context, 10 with it).
 
 Best practice this mirrors: MT-Bench / Chatbot-Arena-style LLM-as-judge for
 open-ended quality, paired with programmatic outcome checks (τ-bench / SWE-bench
@@ -293,9 +322,10 @@ Speed/Cost/Tokens.
   battery case now scores each column live (green "solved" / red "failed · why"
   badge + a "solved" scoreboard column), via the one scorer in
   [`waku/ops/scoring.py`](../waku/ops/scoring.py) shared with `shootout.py`.
-- ~~Battery section B (coding) + cross-model pi~~ — **done (CLI)**: `make
-  shootout-coding` runs the coding battery through pi on any pinned model,
-  scored by tests. A coding column in the *live arena* is the remaining piece.
+- ~~Battery section B (coding) + cross-model pi~~ — **done, CLI *and* live arena**:
+  `make shootout-coding` for the table; in the arena, the "coding (pi)" toggle
+  runs each card through pi on its own model with the terminal streaming live,
+  scored by tests.
 - ~~Quality column (K3-as-judge) in the arena~~ — **done**: the "grade with K3"
   toggle judges each reply 0-10 ([`waku/ops/judge.py`](../waku/ops/judge.py));
   per-column badge + a "K3 grade" scoreboard column.
@@ -303,3 +333,113 @@ Speed/Cost/Tokens.
   cost-vs-(quality|completion) scatter — cheap & good is top-left.
 - Remaining: a coding column in the live arena; more battery cases as the video
   script firms up.
+
+---
+
+## 9. Dry run — simulate the whole thing before filming
+
+A full rehearsal of every axis. Copy each prompt **verbatim** into the arena's
+message box — the arena matches it to its battery case by exact text and scores
+it automatically (a typo → it races but shows "—" for Completion).
+
+### Setup
+1. `make dashboard` → open `localhost:7777` → **Compare** tab.
+2. Pick the models you'll film (click the chips). For the full field, all 11.
+3. Hit **clear** on the scoreboard to start from zero.
+4. Turn ON **"grade with K3"** (top-right, next to Race) so every column also
+   gets a Quality score. (Costs one extra K3 call per column — expected.)
+
+### Act 1 — the easy cases (everyone should pass)
+Paste each, click Race, watch the columns fill:
+
+- `Schedule a coffee with Alex next Tuesday at 9am`
+- `Remember that Alex prefers morning meetings`
+- `Send Alex a message that the demo moved to Friday`
+- `What is the capital of France?`  ← the honest **no-tool** case: a good model
+  answers WITHOUT calling a tool (green "solved" = it correctly stayed hands-off)
+
+### Act 2 — the hard cases (where cheap models break — the money segment)
+- `I might grab coffee with Alex sometime, we'll see.`  ← must NOT schedule (over-eager trap)
+- `Block three 25-minute focus sessions tomorrow morning`  ← must make **three** events
+- `Remember that I'm vegetarian, then book dinner with Sam this Thursday at 7pm`  ← must do **both**
+- `Check my calendar for a free 30 minutes this afternoon and schedule a short walk`  ← must **read** then write
+
+Watch for: a model that replies fluently but gets a red **"failed · <why>"** badge.
+That's the whole thesis on screen.
+
+### Act 3 — the multi-tool showcase
+- `Build me a Kanto starter team around Pikachu: search current competitive picks for a balanced six, remember that Pikachu is my starter, and schedule two team-training sessions this week`
+- `Search for the result of the Spain vs Argentina World Cup final, remember who won, and draft a message to Raj about watching the highlights together`
+
+### Act 4 — the reveal
+Scroll to the **Scoreboard**: the cost-vs-quality **scatter** at the top (cheap &
+good = top-left), then the table — sort by **solved**, **K3 grade**, or **total
+cost** by clicking the headers. This is the "is opus 2× the price 2× better?" shot.
+
+### Act 5 — the coding round (terminal, not the dashboard yet)
+```bash
+make shootout-coding RUNS="kimi:kimi-k3 anthropic:claude-opus-4-8 gemini:gemini-3.5-flash"
+```
+Each model's pi writes real code, scored by tests passing. Report saved to
+`.waku/shootout/coding-*.md`.
+
+### Optional — the reproducible CLI table (all agentic cases, all models)
+```bash
+make shootout RUNS="kimi:kimi-k3 anthropic:claude-opus-4-8 gemini:gemini-3.5-flash openai:gpt-5.3-chat-latest xai:grok-4.5"
+```
+`--trials 3` for stable pass-RATES (tool-calling is nondeterministic); saves a
+markdown + json report to `.waku/shootout/` anyone can reproduce with their keys.
+
+### Gotchas to rehearse around
+- **gpt-5.6-sol** errors every race on purpose (reasoning model, can't tool-call
+  on /v1/chat) — leave it in to show the honest error, or drop the chip.
+- **grok** needs xAI credits or it 403s.
+- Judging the whole field at once can 429 the K3 endpoint; a column may show "—"
+  for grade (one retry is built in). Re-race that one if you need it on camera.
+- **kimi-k3 is slow** (reasoning) — its column finishes last; the scoreboard folds
+  each model in as it lands, so the board isn't frozen waiting for it.
+
+---
+
+## 10. Metrics — what every scoreboard column means (and the exact math)
+
+The on-camera legend. Every number is computed one way, in one place, and
+**verified against a hand calculation** (worked example below — all fields match).
+
+| column | what it means | exact formula | good = |
+|--------|---------------|---------------|--------|
+| **solved** | Completion — did it actually do the task | `passed / scored`, per the case checklist (right tool, right args, enough calls) | as close to `scored/scored` as possible |
+| **K3 grade** | Quality — how good the reply is | mean of kimi-k3's 0-10 scores over judged replies | higher (7+ is strong) |
+| **races** | how many times this model ran | count of the model's rows across all races | — (denominator) |
+| **ok** | non-errored runs | `ok / races` (an error = a model that couldn't even run) | `races/races` |
+| **total time** | cumulative wall-clock | Σ `latency_ms` over **successful** runs | lower |
+| **in tok / out tok** | cumulative prompt / completion tokens | Σ `tokens_in`, Σ `tokens_out` over successful runs | — |
+| **total tok** | in + out | `in tok + out tok` | lower for same work |
+| **rate $/M** | the model's list price | `$in / $out` per million tokens (per-model, fact-checked) | — (reference) |
+| **total cost** | cumulative dollars | Σ over successful runs of `(tokens_in × rate_in + tokens_out × rate_out) / 1,000,000` | lower for same quality |
+
+### The rules that decide the edge cases (say these out loud on camera)
+
+- **Cost is repriced from tokens on every read**, so a pricing correction fixes
+  past races too — the number is never stale.
+- **Output tokens cost 3-5× input** — that's why in/out are split. A "cheap" model
+  that's verbose can cost more than a pricier terse one.
+- **Errored races count in `races` and against `ok`, but add nothing** to tokens,
+  cost, or completion. A model that only errors is `$0.00` — and useless. Read the
+  cheapest-that-actually-*completed*, not the cheapest overall.
+- **Only a known battery-case prompt gets a `solved` score** (exact-text match);
+  a free-form prompt races but shows `—`.
+- **`K3 grade` only appears when "grade with K3" was on**; unjudged races show `—`.
+
+### Worked example (this is the calculation double-check)
+
+Two races, two models, known token counts:
+
+| model (rate) | race 1 | race 2 | → solved | K3 grade | total tok | total cost |
+|---|---|---|---|---|---|---|
+| kimi-k3 ($3/$15) | 1000 in / 500 out · passed · q8 | 2000 in / 1000 out · failed · q6 | **1/2** | **7.0** = (8+6)/2 | **4500** | **$0.0315** = (3000·3 + 1500·15)/1M |
+| gemini-3.5-flash ($1.5/$9) | 1000 in / 200 out · passed · q5 | **errored** | **1/1** (errored race not scored) | **5.0** (only race 1 judged) | **1200** | **$0.0033** = (1000·1.5 + 200·9)/1M |
+
+Running `aggregate()` on these inputs reproduces every bold number exactly — the
+scoreboard math is correct. (Re-verify anytime with the worked-example script in
+the commit that added this section.)

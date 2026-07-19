@@ -58,37 +58,70 @@ def make_delegate_tool(settings: Settings) -> Tool:
         if not pi_bin:
             return f"pi isn't installed, so I can't delegate. Install it with: {PI_INSTALL_HINT}"
 
+        from waku.tools import workspace
         if cwd:
             workdir = Path(cwd).expanduser()
             if not workdir.is_dir():
                 return f"delegate_task: the working directory '{cwd}' doesn't exist."
+            in_workspace = False   # working in the user's own project; don't relocate/auto-run
         else:
-            workdir = settings.home / "delegate"   # scratch sandbox for repo-less tasks
-            workdir.mkdir(parents=True, exist_ok=True)
+            # Repo-less task: land it in a dated, documented workspace folder so
+            # the scripts survive and are traceable (not a temp dir), then auto-run.
+            workdir = workspace.new_run_folder(settings.model or settings.provider, task)
+            in_workspace = True
 
         timeout = int(timeout_seconds) or int(os.getenv("WAKU_DELEGATE_TIMEOUT", "300"))
+        # Run pi on the SAME brain the loop is using, so the sub-agent's coding is
+        # this model's coding (that's the point of a per-model comparison). pi
+        # natively speaks every provider we pin; fall back to pi's own default if
+        # this provider isn't mappable. -a/--no-session = headless; stdin=DEVNULL
+        # so pi never blocks on a TTY it doesn't have under the server.
+        from waku.ops.coding_eval import PI_PROVIDER, _key_for
+        cmd = [pi_bin]
+        pi_prov = PI_PROVIDER.get(settings.provider)
+        if pi_prov and settings.model:
+            cmd += ["--provider", pi_prov, "--model", settings.model]
+            key = _key_for(settings.provider)
+            if key:
+                cmd += ["--api-key", key]
+        cmd += ["-p", task, "-a", "--no-session"]
         try:
-            result = subprocess.run([pi_bin, "-p", task], cwd=workdir, capture_output=True,
-                                    text=True, timeout=timeout, check=False)
+            result = subprocess.run(cmd, cwd=workdir, stdin=subprocess.DEVNULL,
+                                    capture_output=True, text=True, timeout=timeout, check=False)
         except subprocess.TimeoutExpired:
             return (f"pi was still working after {timeout}s so I stopped it — try a smaller "
                     f"task, or raise WAKU_DELEGATE_TIMEOUT.")
         except OSError as exc:
             return f"Couldn't launch pi: {exc}"
 
-        # Full paper trail in the outbox; only a short, speakable summary goes
-        # back into the loop (tool results live in working memory).
-        log = settings.home / "outbox" / f"delegate-{datetime.now():%Y%m%d-%H%M%S}.log"
-        log.parent.mkdir(parents=True, exist_ok=True)
-        log.write_text(f"$ pi -p {task!r}   (cwd: {workdir})\n\n--- stdout ---\n"
-                       f"{result.stdout}\n--- stderr ---\n{result.stderr}", encoding="utf-8")
+        # Full pi transcript alongside the work (workspace) or in the outbox.
+        transcript = (workdir / "pi-transcript.log") if in_workspace else (
+            settings.home / "outbox" / f"delegate-{datetime.now():%Y%m%d-%H%M%S}.log")
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text(f"$ {' '.join(cmd[:-4])} -p {task!r}   (cwd: {workdir})\n\n"
+                              f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}",
+                              encoding="utf-8")
 
         if result.returncode != 0:
             err = (result.stderr or result.stdout).strip()[-200:] or "no output"
-            return f"pi hit an error: {err} (full log: .waku/outbox/{log.name})"
-        summary = result.stdout.strip()[-600:] or "(pi finished but printed nothing)"
-        return (f"pi finished the delegated task in {workdir}.\n{summary}\n"
-                f"(full log: .waku/outbox/{log.name})")
+            return f"pi hit an error: {err} (full log: {transcript})"
+        summary = result.stdout.strip()[-500:] or "(pi finished but printed nothing)"
+
+        if not in_workspace:
+            return f"pi finished the delegated task in {workdir}.\n{summary}\n(full log: {transcript})"
+
+        # Scratch task: document the run (dated MANIFEST) and auto-run the script,
+        # feeding the run result back into the loop so the model can react to it.
+        files = workspace.created_files(workdir)
+        run = workspace.autorun(workdir)
+        workspace.write_manifest(workdir, settings.provider, settings.model or "(default)", task, files, run)
+        made = ", ".join(p.name for p in files[:6]) or "no files"
+        lines = [f"pi finished. Files saved to {workdir} ({made}).", summary]
+        if run is not None:
+            entry, code, out, secs = run
+            verdict = "still running (interactive)" if code is None else ("ran clean" if code == 0 else f"exited {code}")
+            lines.append(f"\nAuto-ran {entry}: {verdict} in {secs}s.\n{out[-400:]}")
+        return "\n".join(lines)
 
     return Tool(
         name="delegate_task",

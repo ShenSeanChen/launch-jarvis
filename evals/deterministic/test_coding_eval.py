@@ -64,3 +64,32 @@ def test_coding_cases_load_and_have_verify():
     assert len(cases) >= 2
     for c in cases:
         assert "id" in c and "input" in c and "verify" in c
+
+
+def test_coding_case_for_message_matches_trimmed():
+    cases = [{"id": "fizz", "input": "Create fizzbuzz.py"}]
+    assert ce.coding_case_for_message("  Create fizzbuzz.py ", cases)["id"] == "fizz"
+    assert ce.coding_case_for_message("build a website", cases) is None
+
+
+def test_stream_runner_scores_by_verify_and_emits_lines(tmp_path, monkeypatch):
+    _stub_pi(monkeypatch)                       # pi = no-op; seeded file provides the code
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    lines = []
+    passed, why, secs = ce.run_coding_stream(
+        "anthropic", "claude-opus-4-8",
+        task="n/a",
+        files={"fizzbuzz.py": "def fizzbuzz(n):\n    return 'FizzBuzz' if n%15==0 else str(n)\n"},
+        verify="python3 -c \"from fizzbuzz import fizzbuzz; assert fizzbuzz(15)=='FizzBuzz'\"",
+        on_line=lines.append)
+    assert passed is True and why == "tests pass"
+    assert any(ln.startswith("$ pi") for ln in lines)   # the launch line streamed
+
+
+def test_stream_runner_free_form_has_no_verdict(tmp_path, monkeypatch):
+    _stub_pi(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    passed, why, _ = ce.run_coding_stream("anthropic", "claude-opus-4-8",
+                                          task="build snake", files=None, verify=None,
+                                          on_line=lambda _ln: None)
+    assert passed is None            # nothing to score -> no pass/fail, it just ran

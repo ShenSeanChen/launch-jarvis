@@ -20,7 +20,14 @@ function render(){
     // don't wipe an in-progress edit on the 5s refresh — but DO switch sub-tabs
   } else {
     editing = false;
+    // Rebuilding #view innerHTML resets the scroll. On a same-view refresh (the
+    // 5s poll, a sort click) keep the reader where they were — only jump to top
+    // on an actual navigation (subChanged), where top is correct.
+    const main = document.querySelector("main");
+    const keepScroll = !subChanged && main;
+    const y = keepScroll ? main.scrollTop : 0;
     document.getElementById("view").innerHTML = VIEWS[view](D, sub);
+    if (keepScroll) main.scrollTop = y;
   }
   activeView = view; activeSub = sub;
   document.getElementById("model").textContent = `${D.provider} · ${D.model}`;
@@ -32,6 +39,7 @@ function render(){
   document.getElementById("n-ops").textContent = D.stats.tool_errors || (D.eval_report ? "" : "!");
 }
 let lastFetch = Date.now();
+let lastCompareLoad = 0;   // throttle the Compare scoreboard self-heal to ~5s
 function tickLive(){
   if (!D) return;
   const ago = Math.round((Date.now()-lastFetch)/1000);
@@ -55,6 +63,16 @@ async function refresh(){
     applyTele();      // reflect the stats on/off choice (default on)
     syncLiveView();   // live-update an opened conversation (e.g. new phone messages)
     if (!dockRestored) restoreDock();
+    // Self-heal the Compare scoreboard: it otherwise only loads on tab-open and
+    // after a race, so a slow/interrupted race (or a server blip) can leave it
+    // showing a partial set. Re-pull the server totals while viewing the tab —
+    // but never mid-race (that's the live fold's job) or mid-edit, and at most
+    // every ~5s so we don't hammer the endpoint on the faster render ticks.
+    if (activeView === "compare" && !compareState.running && !editing
+        && Date.now() - lastCompareLoad > 5000){
+      lastCompareLoad = Date.now();
+      loadCompareHistory();
+    }
   } catch(e){ /* server restarting — keep showing last data */ }
 }
 // --- resizable columns: drag the thin handle between nav|main and main|dock.

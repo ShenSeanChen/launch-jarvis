@@ -225,7 +225,8 @@ def _compare_one(message: str, spec: str) -> dict:
                 "tools": [{"tool": c["tool"]} for c in result.tool_calls],
                 "tokens_in": tin, "tokens_out": tout,
                 "cost_usd": round(tin / 1e6 * pin + tout / 1e6 * pout, 4)}
-    except Exception as exc:   # a broken contestant fails alone, not the whole race
+    except (Exception, SystemExit) as exc:   # a broken contestant (incl. a missing
+        # key, which get_client raises as SystemExit) fails alone, not the whole race
         return {"spec": spec, "provider": provider, "model": model, "error": str(exc)[:200]}
 
 
@@ -244,7 +245,8 @@ def compare_models(payload: dict) -> dict:
     return {"ok": True, "message": message, "results": results}
 
 
-def compare_stream(message: str, specs: list, emit, judge: bool = False) -> None:
+def compare_stream(message: str, specs: list, emit, judge: bool = False,
+                   coding: bool = False, judge_spec: str = "", apple: bool = False) -> None:
     """Race the models and stream each one's harness LIVE — gate decision and
     tool calls, per model — so every column plays out like the chat dock instead
     of a static 'racing…'. Each contestant runs the REAL loop (tools included) in
@@ -296,8 +298,13 @@ def compare_stream(message: str, specs: list, emit, judge: bool = False) -> None
                 send("tool", {"spec": spec, "tool": ev.get("tool")})
 
         try:
+            # coding mode registers delegate_task (the pi sub-agent) so the loop
+            # can hand real programming work to pi — running the FULL harness
+            # (gate, memory, tools), not a bypass. pi runs on this card's model.
+            # apple_calendar defaults OFF (isolation), opt-in per race — when on,
+            # EACH model writes its own event to the real 'Waku' calendar.
             settings = Settings(provider=provider, model=model, small_model="",
-                                home=home, apple_calendar=False)
+                                home=home, apple_calendar=apple, experimental=coding)
             app = Waku(settings=settings)
             # A scored case may pre-load a fact (e.g. "applies memory") so every
             # model starts from the same state the checklist assumes.
@@ -321,20 +328,45 @@ def compare_stream(message: str, specs: list, emit, judge: bool = False) -> None
             if case:
                 passed, why = scoring.check_case(case, result.tool_calls)
                 completion = {"passed": passed, "why": why, "case": case["id"]}
-            # Quality: K3 grades the reply 0-10 when judging is on (own API call,
-            # so it's opt-in per race). A judge hiccup returns None, never fails.
-            quality = judge_mod.judge_reply(message, result.reply) if judge else None
+            # Quality (referee grade) is NOT done here — it runs as one controlled
+            # pass AFTER every column finishes (see below), so the referee doesn't
+            # get a burst of concurrent calls and skip some.
             send("result", {"spec": spec, "provider": provider, "model": settings.model,
                             "reply": result.reply, "gate": (gate or None),
                             "iterations": result.iterations, "latency_ms": ms,
                             "tools": [{"tool": c["tool"]} for c in result.tool_calls],
                             "tokens_in": tin, "tokens_out": tout, "cost_usd": cost,
-                            "completion": completion, "quality": quality})
-        except Exception as exc:
+                            "completion": completion, "quality": None})
+        except (Exception, SystemExit) as exc:
+            # SystemExit (not an Exception subclass) is what get_client raises for
+            # a missing/misconfigured key. Catch it too, or a keyless provider
+            # would vanish from the race silently instead of showing WHY it failed.
             send("result", {"spec": spec, "provider": provider, "model": model, "error": str(exc)[:200]})
 
     with ThreadPoolExecutor(max_workers=min(len(specs), 6)) as ex:
         list(ex.map(run, specs))
+
+    # Grade AFTER the race, as one gentle pass — so the referee gets a steady
+    # trickle of calls (max_workers=2) instead of a burst the moment every column
+    # finishes, which used to 429 and leave some models ungraded. Each grade
+    # updates its card ("grade" event) and the stored result, so history + the
+    # scoreboard end up with every model scored.
+    if judge:
+        jp, _, jm = (judge_spec or "").partition(":")
+        gradable = [r for r in collected if not r.get("error") and (r.get("reply") or "").strip()]
+        emit("grading", {"n": len(gradable), "judge": jm or judge_mod.JUDGE_MODEL})
+
+        def grade(r):
+            if r.get("error") or not (r.get("reply") or "").strip():
+                return
+            q = judge_mod.judge_reply(message, r["reply"], jp or None, jm or None,
+                                      tools=[t.get("tool") for t in (r.get("tools") or [])])
+            r["quality"] = q                       # fold into what gets persisted
+            send("grade", {"spec": r.get("spec"), "quality": q})
+
+        with ThreadPoolExecutor(max_workers=2) as jex:
+            list(jex.map(grade, list(collected)))
+
     # Persist the race to the arena's own history (never the agent's real state).
     try:
         compare_history.append_run(load_settings().home, message, collected)
@@ -348,6 +380,61 @@ def compare_clear(payload: dict) -> dict:
     own log; nothing else is touched."""
     compare_history.clear(load_settings().home)
     return {"ok": True, "runs": [], "aggregate": []}
+
+
+def _compare_history_response(runs: list[dict]) -> dict:
+    """Reprice each stored result from its tokens with the CURRENT price table (so
+    a pricing fix corrects past races), aggregate, and tag each row with the rate.
+    The shared shape returned by /api/compare/history and the re-grade endpoint."""
+    for run in runs:
+        for r in run.get("results", []):
+            if r.get("error"):
+                continue
+            pin, pout = price_for(r.get("provider", ""), r.get("model", ""))
+            r["cost_usd"] = round((r.get("tokens_in") or 0) / 1e6 * pin
+                                  + (r.get("tokens_out") or 0) / 1e6 * pout, 4)
+    agg = compare_history.aggregate(runs)
+    for row in agg:
+        row["rate_in"], row["rate_out"] = price_for(row["provider"], row["model"])
+    return {"runs": runs[-20:][::-1], "aggregate": agg}
+
+
+def compare_regrade(payload: dict) -> dict:
+    """Re-run the referee on the most recent race — for models the grader skipped
+    (429'd) the first time. `only_missing` (default true) grades only the ungraded
+    ones; pass false to re-grade everyone. Returns the refreshed history +
+    scoreboard, same shape as /api/compare/history."""
+    home = load_settings().home
+    runs = compare_history.load_runs(home)
+    if not runs:
+        return {"runs": [], "aggregate": []}
+    jp, _, jm = (payload.get("judge_model") or "").partition(":")
+    only_missing = payload.get("only_missing", True)
+    spec = payload.get("spec")   # grade just ONE card (the per-card button)
+    last = runs[-1]
+    for r in last.get("results", []):
+        if r.get("error") or not (r.get("reply") or "").strip():
+            continue
+        if spec is not None and r.get("spec") != spec:
+            continue
+        if spec is None and only_missing and r.get("quality") is not None:
+            continue
+        q = judge_mod.judge_reply(last.get("message", ""), r["reply"], jp or None, jm or None,
+                                  tools=r.get("tools"))   # history stores tools as [names]
+        if q is not None:
+            r["quality"] = q
+    compare_history.save_runs(home, runs)
+    return _compare_history_response(runs)
+
+
+def compare_delete_run(payload: dict) -> dict:
+    """Delete ONE race (by timestamp) from the scoreboard — its models drop out of
+    the totals — leaving every other race intact. Returns the refreshed history."""
+    home = load_settings().home
+    ts = payload.get("ts")
+    runs = [r for r in compare_history.load_runs(home) if r.get("ts") != ts]
+    compare_history.save_runs(home, runs)
+    return _compare_history_response(runs)
 
 
 # Rough $/million tokens (in, out) for a dollar ESTIMATE — the number humans
@@ -990,6 +1077,18 @@ def memory_action(payload: dict) -> dict:
 _models_cache: dict[str, tuple[float, list]] = {}
 
 
+def _known_default_ids(prov, out: dict, is_active: bool) -> list[dict]:
+    """Best-effort model list when the live catalog is unreachable: the provider's
+    flagship + fast + loop/gate defaults — so the showcase model (e.g. opus-4.8)
+    is offered too, not just the two loop defaults — plus the active model when
+    this is the active provider."""
+    ids = [*(prov.default_pair() if prov else []),
+           prov.model if prov else "", prov.small_model if prov else ""]
+    if is_active:
+        ids = [out.get("model"), out.get("small_model"), *ids]
+    return [{"id": m} for m in dict.fromkeys(m for m in ids if m)]
+
+
 def list_models(provider: str | None = None) -> dict:
     """Model ids available on a provider, for the settings model picker — the
     defaults are starting points, never the menu. Pass `provider` to list ANY
@@ -1027,11 +1126,9 @@ def list_models(provider: str | None = None) -> dict:
         url = base.rstrip("/") + "/models"
     else:
         # No catalog endpoint: fall back to the provider's own known defaults
-        # (not the active model, which belongs to a different provider).
-        known = dict.fromkeys([prov.model, prov.small_model] if prov else [])
-        if name == s.provider:
-            known = dict.fromkeys([out["model"], out["small_model"], *known])
-        return {**out, "listed": False, "models": [{"id": m} for m in known if m]}
+        # (flagship + fast + loop/gate), not just the active model.
+        return {**out, "listed": False,
+                "models": _known_default_ids(prov, out, name == s.provider)}
 
     cached = _models_cache.get(url)
     if cached and time.time() - cached[0] < 300:
@@ -1041,7 +1138,18 @@ def list_models(provider: str | None = None) -> dict:
             r["error"] = cerr
         return r
     # Use this provider's own key; s.api_key only holds the ACTIVE provider's.
-    key = (s.api_key if name == s.provider else "") or os.getenv(prov.key_env, "")
+    key = ((s.api_key if name == s.provider else "") or os.getenv(prov.key_env, "")).strip()
+    # HTTP headers must be latin-1; a key with a stray non-ASCII char (a smart
+    # arrow/quote or a line-break from a bad paste) would otherwise crash the
+    # whole listing with an opaque codec error and silently drop back to two
+    # defaults. Catch it here with a message that actually says how to fix it.
+    try:
+        key.encode("latin-1")
+    except UnicodeEncodeError:
+        msg = (f"{prov.key_env} contains a non-ASCII character — re-paste the key "
+               f"(no spaces, line breaks, or arrows).")
+        return {**out, "listed": False,
+                "models": _known_default_ids(prov, out, name == s.provider), "error": msg}
     # send both auth styles — Bearer for OpenAI-compatible catalogs, x-api-key +
     # version for Anthropic's; each server reads the header it knows
     req = urllib.request.Request(url, headers={
@@ -1060,7 +1168,7 @@ def list_models(provider: str | None = None) -> dict:
         except Exception:
             pass
         # still offer the provider's known defaults so the picker isn't empty
-        known = [{"id": m} for m in dict.fromkeys([prov.model, prov.small_model]) if m]
+        known = _known_default_ids(prov, out, name == s.provider)
         # cache the failure (defaults + reason) for ~1 minute so an unreachable
         # catalog doesn't stall every 5-second dashboard poll for 10s — and so a
         # cache hit still shows the defaults and the reason, not a blank list.
@@ -1326,25 +1434,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/data":
             self._send(json.dumps(collect(), default=str).encode(), "application/json")
         elif self.path == "/api/compare/history":
-            home = load_settings().home
-            runs = compare_history.load_runs(home)
-            # Reprice every stored result from its tokens with the CURRENT price
-            # table, the way usage_summary repricing works — so a pricing fix
-            # corrects past races too, instead of leaving stale $ baked in at
-            # write time. The store keeps raw tokens for exactly this reason.
-            for run in runs:
-                for r in run.get("results", []):
-                    if r.get("error"):
-                        continue
-                    pin, pout = price_for(r.get("provider", ""), r.get("model", ""))
-                    r["cost_usd"] = round((r.get("tokens_in") or 0) / 1e6 * pin
-                                          + (r.get("tokens_out") or 0) / 1e6 * pout, 4)
-            agg = compare_history.aggregate(runs)
-            for row in agg:   # label each row with the rate the cost was computed at
-                row["rate_in"], row["rate_out"] = price_for(row["provider"], row["model"])
-            self._send(json.dumps({"runs": runs[-20:][::-1],   # newest first for display
-                                   "aggregate": agg}).encode(),
-                       "application/json")
+            runs = compare_history.load_runs(load_settings().home)
+            self._send(json.dumps(_compare_history_response(runs)).encode(), "application/json")
         elif self.path.startswith("/api/models"):
             from urllib.parse import parse_qs, urlparse
 
@@ -1424,13 +1515,15 @@ class Handler(BaseHTTPRequestHandler):
                     pass
             try:
                 compare_stream((payload.get("message") or "").strip(), payload.get("models") or [],
-                               emit, judge=bool(payload.get("judge")))
+                               emit, judge=bool(payload.get("judge")), coding=bool(payload.get("coding")),
+                               judge_spec=(payload.get("judge_model") or ""), apple=bool(payload.get("apple")))
             except Exception as exc:
                 emit("done", {"error": f"{type(exc).__name__}: {exc}"})
             return
         routes = {"/api/chat": None, "/api/memory": memory_action, "/api/settings": apply_settings,
                   "/api/query": run_query, "/api/session": session_action, "/api/pin": pin_action,
-                  "/api/compare": compare_models, "/api/compare/clear": compare_clear}
+                  "/api/compare": compare_models, "/api/compare/clear": compare_clear,
+                  "/api/compare/regrade": compare_regrade, "/api/compare/delete_run": compare_delete_run}
         if self.path not in routes:
             self.send_response(404)
             self.end_headers()

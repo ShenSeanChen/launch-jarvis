@@ -74,6 +74,27 @@ def test_model_listing_falls_back_without_a_catalog(name, monkeypatch):
     assert result["listed"] is False
     ids = [m["id"] for m in result["models"]]
     assert PROVIDERS[name].model in ids
+    # the flagship (showcase) model is offered too, not just the loop default
+    if PROVIDERS[name].flagship:
+        assert PROVIDERS[name].flagship in ids
+
+
+def test_bad_key_gives_a_fixable_error_not_a_codec_crash(monkeypatch):
+    """A key with a stray non-latin-1 char (a mis-pasted arrow/smart-quote) must
+    NOT crash the whole catalog with an opaque codec error — it should return a
+    fixable message AND still offer the flagship so opus-4.8/fable-5 aren't lost.
+    (Regression: a cloned repo whose ANTHROPIC_API_KEY had a '→' dropped the
+    picker to two defaults with a 'latin-1 codec' error.)"""
+    from waku.ops import dashboard
+
+    monkeypatch.setenv("WAKU_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-" + "x" * 100 + "→bad")
+    monkeypatch.delenv("WAKU_MODEL", raising=False)
+    dashboard._models_cache.clear()
+    result = dashboard.list_models("anthropic")
+    assert result["listed"] is False
+    assert "ANTHROPIC_API_KEY" in result["error"] and "non-ASCII" in result["error"]
+    assert "claude-opus-4-8" in [m["id"] for m in result["models"]]
 
 
 def test_catalog_url_is_used_with_both_auth_styles(monkeypatch):

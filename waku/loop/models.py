@@ -106,11 +106,20 @@ def get_client(settings: Settings):
         raise SystemExit(f"Unknown WAKU_PROVIDER '{settings.provider}'. "
                          f"Pick one of: {', '.join(PROVIDERS)}")
 
-    api_key = settings.api_key or os.getenv(provider.key_env, "")
+    # .strip() so a trailing newline/space from a copy-paste doesn't corrupt the
+    # auth header (headers are latin-1; a stray non-ASCII char errors cryptically).
+    api_key = (settings.api_key or os.getenv(provider.key_env, "")).strip()
     if not api_key:
         raise SystemExit(
             f"No API key for provider '{settings.provider}'. "
             f"Set {provider.key_env} in .env (see .env.example)."
+        )
+    try:
+        api_key.encode("latin-1")
+    except UnicodeEncodeError:
+        raise SystemExit(
+            f"{provider.key_env} contains a non-ASCII character (e.g. a smart quote "
+            f"or arrow from a bad paste). Re-paste the key with no spaces or line breaks."
         )
 
     settings.model = settings.model or provider.model

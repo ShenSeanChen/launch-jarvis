@@ -10,7 +10,9 @@
 // localStorage — tab switches and full reloads, so a finished race isn't lost.
 // Kept out of the chat log on purpose: a benchmark isn't a conversation.
 let compareState = { message: "Build a Kanto team around Pikachu — search current picks, remember it, and schedule two training sessions this week.",
-                     picked: null, running: false, results: null, order: null, sortBy: "latency" };
+                     picked: null, running: false, results: null, order: null, sortBy: "latency",
+                     // grade every race by default, with a neutral (non-racing) referee
+                     judge: true, judgeModel: "openai:gpt-5.6-sol" };
 try {
   const saved = JSON.parse(localStorage.getItem("waku_compare") || "null");
   if (saved){ compareState.message = saved.message ?? compareState.message;
@@ -48,6 +50,56 @@ async function clearCompareHistory(){
   compareState.history = r.runs || []; compareState.aggregate = r.aggregate || [];
   editing = false; render();
 }
+// Re-run the referee on the most recent race for any models it skipped (429'd).
+// Updates the stored history + the visible cards. only_missing keeps already-
+// graded models untouched.
+async function regradeCompare(){
+  if (compareState.regrading) return;
+  compareState.regrading = true; editing = false; render();
+  try {
+    const r = await postJSON("/api/compare/regrade",
+      {judge_model: compareState.judgeModel || "openai:gpt-5.6-sol", only_missing: false});
+    compareState.history = r.runs || []; compareState.aggregate = r.aggregate || [];
+    const last = (r.runs || [])[0];
+    if (last && compareState.results){
+      last.results.forEach(x => { if (compareState.results[x.spec]) compareState.results[x.spec].quality = x.quality; });
+    }
+  } catch(e){ compareState.raceError = "re-grade failed: " + e; }
+  compareState.regrading = false; editing = false; render();
+}
+// Grade ONE card — the referee sometimes 429-skips a single model. Grades just
+// this spec in the latest run, updates its badge + the scoreboard.
+async function gradeCard(spec){
+  const R = compareState.results || {};
+  if (!R[spec] || R[spec]._grading) return;
+  R[spec]._grading = true; editing = false; render();
+  try {
+    const r = await postJSON("/api/compare/regrade",
+      {spec, judge_model: compareState.judgeModel || "openai:gpt-5.6-sol"});
+    compareState.history = r.runs || []; compareState.aggregate = r.aggregate || [];
+    const row = ((r.runs || [])[0] || {}).results?.find(x => x.spec === spec);
+    if (row && R[spec]) R[spec].quality = row.quality;
+  } catch(e){ compareState.raceError = "grade failed: " + e; }
+  if (R[spec]) R[spec]._grading = false;
+  editing = false; render();
+}
+// Delete ONE race from the scoreboard (its models leave the totals), leaving
+// every other race intact — vs "clear all" which wipes the whole history.
+async function deleteCompareRun(ts){
+  if (!ts || !confirm("Delete just this run from the scoreboard? (Other races stay.)")) return;
+  try {
+    const r = await postJSON("/api/compare/delete_run", {ts});
+    compareState.history = r.runs || []; compareState.aggregate = r.aggregate || [];
+  } catch(e){ compareState.raceError = "delete failed: " + e; }
+  editing = false; render();
+}
+// Dismiss the race CARDS (the per-model columns) only — the cumulative
+// scoreboard/history is left alone. Handy for a clean slate before the next race.
+function clearCards(){
+  if (compareState.running) return;   // don't yank cards mid-race
+  compareState.order = []; compareState.results = {}; compareState.raceError = null;
+  saveCompare(); editing = false; render();
+}
 // A stored (slimmed) result -> the shape compareCol expects (gate object, tool
 // objects), so a past race renders identically to a live one.
 function adaptHistResult(r){
@@ -65,14 +117,11 @@ function openCompareRun(idx){
 }
 
 // Which models are offered: your pinned shortlist (models.json). Default-pick
-// the first (flagship) of each provider so the race is one brain per lab.
+// ALL of them, so a fresh Compare tab races the whole field (uncheck to narrow).
 function compareModels(d){
   const pinned = ((d.settings && d.settings.pinned) || []);
   if (compareState.picked === null){
-    const seen = new Set();
-    compareState.picked = new Set(pinned.filter(p => {
-      const first = !seen.has(p.provider); seen.add(p.provider); return first;
-    }).map(p => `${p.provider}:${p.model}`));
+    compareState.picked = new Set(pinned.map(p => `${p.provider}:${p.model}`));
   }
   return pinned;
 }
@@ -95,6 +144,32 @@ function toggleJudge(){
   editing = false;
   render();
 }
+// Coding-mode toggle: register the delegate_task tool for the race, so the loop
+// can hand real coding work to a pi sub-agent (running on each card's own model)
+// — the FULL harness runs (gate, memory, tools), delegate_task is just one tool.
+function toggleCoding(){
+  compareState.coding = !compareState.coding;
+  editing = false;
+  render();
+}
+// Write to the real Apple Calendar ('Waku' calendar), opt-in. OFF by default so
+// a race doesn't spam duplicates — when ON, EVERY racing model writes its own
+// event (one per model). Use with 1-2 models to demo the real integration.
+function toggleApple(){
+  compareState.apple = !compareState.apple;
+  editing = false;
+  render();
+}
+// Who grades quality. Deliberately NOT a racing model by default — a contestant
+// can't fairly judge its own round. gpt-5.6-sol is a strong text judge that
+// makes a poor tool-calling contestant, so it's the natural neutral referee.
+const JUDGES = [
+  {spec:"openai:gpt-5.6-sol",            label:"GPT-5.6 Sol"},
+  {spec:"anthropic:claude-opus-4-8",     label:"Claude Opus 4.8"},
+  {spec:"gemini:gemini-3.1-pro-preview", label:"Gemini 3.1 Pro"},
+  {spec:"kimi:kimi-k3",                  label:"Kimi K3 (contestant)"},
+];
+function setJudgeModel(spec){ compareState.judgeModel = spec; editing = false; render(); }
 
 // Race over SSE so each column fills the MOMENT its model finishes — a slow or
 // broken contestant (e.g. a keyless provider) never blocks the others. Results
@@ -107,12 +182,15 @@ async function runCompare(){
   compareState.order = specs;      // columns to show, in picked order
   compareState.results = {};       // spec -> result, filled as they land
   compareState.raceError = null;
+  compareState.grading = null;      // set during the post-race referee pass
   render();
   const R = compareState.results;
   try {
     const res = await fetch("/api/compare/stream", {method:"POST",
       headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({message: compareState.message, models: specs, judge: !!compareState.judge})});
+      body: JSON.stringify({message: compareState.message, models: specs, judge: !!compareState.judge,
+        judge_model: compareState.judgeModel || "openai:gpt-5.6-sol", coding: !!compareState.coding,
+        apple: !!compareState.apple})});
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "";
     for(;;){
@@ -132,7 +210,9 @@ async function runCompare(){
         else if (ev.kind === "gate" && R[s]){ R[s].gate = {decision:ev.decision, reason:ev.reason}; render(); }
         else if (ev.kind === "tool" && R[s]){ (R[s].tools = R[s].tools||[]).push({tool:ev.tool}); render(); }
         else if (ev.kind === "result" && s){ R[s] = ev; saveCompare(); render(); }
-        else if (ev.kind === "done"){ if (ev.error) compareState.raceError = ev.error; }
+        else if (ev.kind === "grading"){ compareState.grading = ev; render(); }   // post-race referee pass begins
+        else if (ev.kind === "grade" && R[s]){ R[s].quality = ev.quality; if (compareState.grading) compareState.grading.done = (compareState.grading.done||0)+1; saveCompare(); render(); }
+        else if (ev.kind === "done"){ compareState.grading = null; if (ev.error) compareState.raceError = ev.error; }
       }
     }
   } catch(e){ compareState.raceError = String(e); }
@@ -152,6 +232,7 @@ async function runCompare(){
 function compareErrorReason(err){
   const e = (err || "").toLowerCase();
   if (e.includes("reasoning_effort") || e.includes("/v1/responses")) return "can't call tools — reasoning model, needs the /v1/responses API";
+  if (e.includes("not a chat model") || e.includes("v1/completions")) return "not a chat model — needs the completions/responses API, not chat";
   if (e.includes("thought_signature")) return "can't call tools — missing thought_signature echo";
   if (e.includes("credit") || e.includes("permission-denied") || e.includes("license")) return "no credits/licenses on this provider";
   if (e.includes("max_tokens")) return "token-parameter mismatch";
@@ -166,7 +247,9 @@ function compareCol(res){
       ${why?`<div class="meta" style="color:var(--bad)"><b>${esc(why)}</b></div>`:""}
       <div class="meta" style="opacity:.7">${esc(res.error)}</div></div>`;
   }
-  const tools = (res.tools||[]).map(t => `<span class="stage done">tool · ${esc(t.tool)}</span>`).join("");
+  const tools = (res.tools||[]).map(t => t.tool === "delegate_task"
+    ? `<span class="stage done subagent" title="the loop spawned a pi sub-agent on ${esc(res.model)} to write &amp; run the code">delegate_task → pi · ${esc(res.model)}</span>`
+    : `<span class="stage done">tool · ${esc(t.tool)}</span>`).join("");
   const gateBadgeHtml = `<span class="badge ${res.gate&&res.gate.decision==="retrieve"?"retrieve":""}">gate · ${esc(res.gate?res.gate.decision:"…")}</span>`;
   if (res.streaming){
     return `<div class="cmp-col">
@@ -180,9 +263,11 @@ function compareCol(res){
   const c = res.completion;
   const completionBadge = c ? `<span class="cmp-score ${c.passed?"pass":"fail"}" title="${esc(c.why||"")}">${c.passed?"solved":"failed"}${c.passed?"":" · "+esc(c.why||"")}</span>` : "";
   const q = res.quality;
-  const qualityBadge = q && q.score!=null ? `<span class="cmp-q ${q.score>=7?"hi":q.score>=4?"mid":"lo"}" title="${esc(q.reason||"")} — judge: ${esc(q.judge||"")}">K3 ${q.score}/10</span>` : "";
+  const qualityBadge = q && q.score!=null ? `<span class="cmp-q ${q.score>=7?"hi":q.score>=4?"mid":"lo"}" title="graded ${q.score}/10 by ${esc(q.judge||"referee")} — ${esc(q.reason||"")}">${q.score}/10</span>` : "";
+  // per-card grade button — grade just this card if the referee skipped it (429)
+  const gradeBtn = `<a class="reveal cmp-grade1" title="grade this card with the referee" onclick="gradeCard('${esc(res.spec)}')">${res._grading?"grading…":(q&&q.score!=null?"re-grade":"grade")}</a>`;
   return `<div class="cmp-col${c?(c.passed?" solved":" failed"):""}">
-    <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${completionBadge}${qualityBadge}</div>
+    <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${completionBadge}${qualityBadge}${gradeBtn}</div>
     <div class="cmp-stats">
       ${gateBadgeHtml}
       <span class="chip ${compareState.sortBy==="latency"?"sorted":""}">${secs(res.latency_ms)}</span>
@@ -220,14 +305,23 @@ VIEWS.compare = function(d){
                      tokens:  r => (r.tokens_in || 0) + (r.tokens_out || 0) };
     const key = metric[compareState.sortBy] || metric.latency;
     const sorters = [["latency", "seconds"], ["tokens", "tokens"], ["cost", "money"]];
+    // Right of the sort tabs, above the cards: "re-grade run" re-runs the referee
+    // on every model in THIS run (the cards below); "clear cards" just dismisses
+    // the columns. Both act on the current run.
+    const regradeBtn = (done.length && !compareState.running)
+      ? `<a class="reveal" style="margin-left:auto;font-size:12px" title="Re-run the referee on every model in this run (fills a skipped/429'd grade, or re-scores)" onclick="regradeCompare()">${compareState.regrading?"re-grading…":"re-grade run"}</a>` : "";
+    const clearBtn = (order.length && !compareState.running)
+      ? `<a class="reveal" style="${regradeBtn?"":"margin-left:auto;"}font-size:12px" onclick="clearCards()">clear cards</a>` : "";
     // Prominent, tab-like sort buttons — the selected one is highlighted.
-    const sortBar = done.length ? `<div class="cmp-sortbar">sort by ${sorters.map(([k, label]) =>
-      `<button class="cmp-sortbtn ${compareState.sortBy === k ? "on" : ""}" onclick="setCompareSort('${k}')">${label}</button>`).join("")}</div>` : "";
+    const sortBar = (done.length || clearBtn) ? `<div class="cmp-sortbar">${done.length
+      ? `sort by ${sorters.map(([k, label]) => `<button class="cmp-sortbtn ${compareState.sortBy === k ? "on" : ""}" onclick="setCompareSort('${k}')">${label}</button>`).join("")}`
+      : ""}${regradeBtn}${clearBtn}</div>` : "";
     // Only a progress line while the race is still running; once every column is
     // in, the sort tabs + cards + scoreboard say it all (no redundant summary).
+    const g = compareState.grading;
     const summary = done.length < order.length
       ? `Racing ${order.length} models — ${done.length}/${order.length} done`
-      : "";
+      : (g ? `Referee ${esc(g.judge||"")} grading — ${g.done||0}/${g.n} scored` : "");
     // Rank finished models first (by the chosen metric), then still-running,
     // then errors — so as the race resolves, the best rises to the top-left.
     const rank = s => {
@@ -255,8 +349,15 @@ VIEWS.compare = function(d){
   return `<div class="card">
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
       <span class="meta">One message, every brain at once — same harness, isolated homes, real receipts (gate · latency · cost · tools). Compare, don't guess.</span>
-      <label class="cmp-judge ${compareState.judge?"on":""}" style="margin-left:auto" title="Grade each reply 0-10 with kimi-k3 (one extra API call per column)">
-        <input type="checkbox" ${compareState.judge?"checked":""} onchange="toggleJudge()"> grade with K3</label>
+      <label class="cmp-judge ${compareState.apple?"on":""}" style="margin-left:auto" title="Write create_event results to your REAL Apple Calendar (the 'Waku' calendar). Off by default so a race doesn't spam duplicates — when on, EACH model writes its own event (use 1-2 models).">
+        <input type="checkbox" ${compareState.apple?"checked":""} onchange="toggleApple()"> write to calendar</label>
+      <label class="cmp-judge ${compareState.coding?"on":""}" title="Coding task: enables the delegate_task tool so the loop can hand real coding work to a pi sub-agent on this card's own model — the full harness runs (gate, tools), delegate_task is one of them">
+        <input type="checkbox" ${compareState.coding?"checked":""} onchange="toggleCoding()"> coding (pi)</label>
+      <label class="cmp-judge ${compareState.judge?"on":""}" title="Grade each reply 0-10 for how well it serves the request (correctness, honesty, concision). One extra API call per column, by a referee that isn't racing.">
+        <input type="checkbox" ${compareState.judge?"checked":""} onchange="toggleJudge()"> grade &mdash; referee
+        <select onchange="setJudgeModel(this.value)" onclick="event.stopPropagation()" ${compareState.judge?"":"disabled"}>
+          ${JUDGES.map(j=>`<option value="${j.spec}" ${(compareState.judgeModel||"openai:gpt-5.6-sol")===j.spec?"selected":""}>${esc(j.label)}</option>`).join("")}
+        </select></label>
       <button class="save cmp-race" onclick="runCompare()" ${(!n||compareState.running)?"disabled":""}>
         ${compareState.running?"Racing…":`Race ${n} model${n===1?"":"s"}`}</button>
     </div>
@@ -306,6 +407,16 @@ function boardAggregate(){
   }
   return Object.values(map);
 }
+// A small styled tooltip for the scatter's hover zones (instant + reliable,
+// unlike a native SVG <title>). One element, reused; follows the cursor.
+function _scTip(){
+  let el = document.getElementById("sc-tip");
+  if (!el){ el = document.createElement("div"); el.id = "sc-tip"; el.className = "sc-tip"; document.body.appendChild(el); }
+  return el;
+}
+function showScatterTip(e){ const el = _scTip(); el.textContent = e.currentTarget.getAttribute("data-tip") || ""; el.style.display = "block"; moveScatterTip(e); }
+function moveScatterTip(e){ const el = _scTip(); el.style.left = (e.clientX + 14) + "px"; el.style.top = (e.clientY + 12) + "px"; }
+function hideScatterTip(){ const el = document.getElementById("sc-tip"); if (el) el.style.display = "none"; }
 // The reveal: total cost (x) vs how good (y). Y is K3's grade when we have it,
 // else the completion pass-rate — so "cheap AND good" sits top-LEFT. This is the
 // picture the whole arena is built to draw ("is opus 20x the price 20x better?").
@@ -330,14 +441,25 @@ function costQualityScatter(agg){
     return `<circle cx="${px(p.x).toFixed(1)}" cy="${py(p.y).toFixed(1)}" r="5" class="sc-dot ${cls}"/>
       <text x="${(px(p.x)+9).toFixed(1)}" y="${(py(p.y)+3).toFixed(1)}" class="sc-lbl">${esc(p.a.model)} · ${money(p.x)}</text>`;
   }).join("");
+  // Hover the y-axis label to read the criteria (native SVG <title> tooltip).
+  const yCriteria = useQ
+    ? "Referee grade — 0-10, scored by a model that isn't racing, given the tools that actually fired:\n"
+      + "9-10  fully addresses the request — correct, concise, honest\n"
+      + "5-8   mostly there — minor gaps, padding, or small errors\n"
+      + "1-4   partial, vague, or partly wrong\n"
+      + "0     ignores it, or claims an action it didn't take"
+    : "Completion — fraction of the task's checklist met (right tool, right args, enough calls). Deterministic, no judge.";
+  const yLabel = useQ ? "referee grade" : "completion";
   return `<div class="card" style="padding:12px 14px;margin-top:14px">
-    <div class="meta" style="margin-bottom:4px">Cost vs ${useQ?"quality (K3 grade)":"completion"} — cheap &amp; good is top-left</div>
+    <div class="meta" style="margin-bottom:4px">Cost vs ${useQ?"quality (referee grade)":"completion"} — cheap &amp; good is top-left</div>
     <svg viewBox="0 0 ${W} ${H}" class="scatter" preserveAspectRatio="xMidYMid meet">
       <line x1="${L}" y1="${T}" x2="${L}" y2="${H-B}" class="sc-axis"/>
       <line x1="${L}" y1="${H-B}" x2="${W-R}" y2="${H-B}" class="sc-axis"/>
       ${gr}${dots}
       <text x="${(L+(W-R-L)/2).toFixed(0)}" y="${H-6}" class="sc-tick" text-anchor="middle">total cost →</text>
-      <text x="14" y="${(T+(H-B-T)/2).toFixed(0)}" class="sc-tick" text-anchor="middle" transform="rotate(-90 14 ${(T+(H-B-T)/2).toFixed(0)})">${useQ?"K3 grade":"completion"} →</text>
+      <text x="14" y="${(T+(H-B-T)/2).toFixed(0)}" class="sc-tick sc-ylabel" text-anchor="middle" transform="rotate(-90 14 ${(T+(H-B-T)/2).toFixed(0)})">${yLabel} →</text>
+      <rect class="sc-yhit" x="0" y="${T}" width="26" height="${H-B-T}" data-tip="${esc(yCriteria)}"
+        onmouseenter="showScatterTip(event)" onmousemove="moveScatterTip(event)" onmouseleave="hideScatterTip()"/>
     </svg></div>`;
 }
 function compareHistoryHtml(){
@@ -354,10 +476,10 @@ function compareHistoryHtml(){
   const scoreboard = agg.length ? `
     <h2 style="margin-top:22px;display:flex;align-items:center;gap:10px">Scoreboard
       <span class="meta" style="font-weight:400">— totals across ${raceCount} race${raceCount===1?"":"s"}</span>
-      <a class="reveal" style="margin-left:auto;font-size:12px" onclick="clearCompareHistory()">clear</a></h2>
+      <a class="reveal" style="margin-left:auto;font-size:12px" onclick="clearCompareHistory()">clear all</a></h2>
     ${costQualityScatter(agg)}
     <div class="card" style="padding:4px 8px"><table>
-      <tr><th>model</th>${th("cases_passed","solved")}${th("quality_avg","K3 grade")}${th("runs","races")}<th>ok</th>${th("total_latency_ms","total time")}${th("total_tokens_in","in tok")}${th("total_tokens_out","out tok")}${th("total_tokens","total tok")}<th title="list price per million tokens, input / output">rate $/M</th>${th("total_cost_usd","total cost")}</tr>
+      <tr><th>model</th>${th("cases_passed","solved")}<th class="cmp-th ${bs.key==="quality_avg"?"on":""}" onclick="setBoardSort('quality_avg')" title="referee's mean 0-10 grade on the replies (correctness, honesty, concision) — referee is not a racing model">grade${arrow("quality_avg")}</th>${th("runs","races")}<th>ok</th>${th("total_latency_ms","total time")}${th("total_tokens_in","in tok")}${th("total_tokens_out","out tok")}${th("total_tokens","total tok")}<th title="list price per million tokens, input / output">rate $/M</th>${th("total_cost_usd","total cost")}</tr>
       ${rows.map(a=>`<tr>
         <td><span class="mm-prov">${esc(a.provider)}</span> <code>${esc(a.model)}</code></td>
         <td>${a.cases_scored?`<span class="cmp-score ${a.cases_passed===a.cases_scored?"pass":(a.cases_passed?"part":"fail")}">${a.cases_passed}/${a.cases_scored}</span>`:'<span class="meta">—</span>'}</td>
@@ -375,6 +497,7 @@ function compareHistoryHtml(){
       <div class="pinrow" style="cursor:pointer" onclick="openCompareRun(${i})">
         <code style="flex:1;word-break:break-all">${esc((run.message||"").slice(0,90))}</code>
         <span class="meta" style="white-space:nowrap">${(run.results||[]).length} models · ${esc((run.ts||"").slice(0,16).replace("T"," "))}</span>
+        <a class="reveal del" style="margin-left:8px;font-size:14px" title="delete just this run" onclick="event.stopPropagation(); deleteCompareRun('${esc(run.ts||"")}')">×</a>
       </div>`).join("")}</div>` : "";
   return scoreboard + recent;
 }

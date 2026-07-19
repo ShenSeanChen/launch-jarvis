@@ -67,6 +67,12 @@ class Settings:
     apple_tools: bool = field(
         default_factory=lambda: os.getenv("WAKU_APPLE_TOOLS", "") in ("1", "true", "yes")
     )
+    # Register the experimental tools (delegate_task -> pi sub-agent, ...). Env is
+    # the global switch; the arena sets this per-race so a coding race can hand
+    # work to pi WITHOUT flipping it on for the whole process.
+    experimental: bool = field(
+        default_factory=lambda: os.getenv("WAKU_EXPERIMENTAL", "") in ("1", "true", "yes")
+    )
 
     # --- Optional gateway
     telegram_token: str = field(default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN", ""))

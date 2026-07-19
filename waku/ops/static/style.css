@@ -300,6 +300,7 @@
   .stage{font-size:11px;padding:2px 9px;border-radius:99px;border:1px solid var(--line2);color:var(--ink3)}
   .stage.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
   .stage.done{border-color:var(--good);color:var(--good)}
+  .stage.subagent{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);font-weight:600}
   table{width:100%;border-collapse:collapse;font-size:13px}
   td,th{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
   tr:last-child td{border-bottom:none}

@@ -88,6 +88,13 @@ function toggleCompareModel(spec){
   editing = false;   // release the textarea edit-lock so this redraw isn't
   render();          // skipped by the guard (else the count/chips go stale)
 }
+// Grade-with-K3 toggle: when on, each column's reply is judged 0-10 by kimi-k3
+// (an extra API call per column, so it's opt-in).
+function toggleJudge(){
+  compareState.judge = !compareState.judge;
+  editing = false;
+  render();
+}
 
 // Race over SSE so each column fills the MOMENT its model finishes — a slow or
 // broken contestant (e.g. a keyless provider) never blocks the others. Results
@@ -105,7 +112,7 @@ async function runCompare(){
   try {
     const res = await fetch("/api/compare/stream", {method:"POST",
       headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({message: compareState.message, models: specs})});
+      body: JSON.stringify({message: compareState.message, models: specs, judge: !!compareState.judge})});
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "";
     for(;;){
@@ -129,8 +136,11 @@ async function runCompare(){
       }
     }
   } catch(e){ compareState.raceError = String(e); }
-  compareState.running = false; saveCompare(); render();
-  loadCompareHistory();   // the server just logged this race — refresh the scoreboard
+  compareState.running = false; saveCompare();
+  // The server just logged this race; loadCompareHistory re-renders with the
+  // fresh (race-inclusive) totals. No intermediate render(), so the live-folded
+  // rows hand off to the server totals without a flicker.
+  loadCompareHistory();
 }
 
 // One contestant's column. While the model runs (res.streaming) it plays out
@@ -167,8 +177,12 @@ function compareCol(res){
       <div class="meta">${(res.tools||[]).length?"running tools…":"thinking…"} <span class="caret"></span></div>
     </div>`;
   }
-  return `<div class="cmp-col">
-    <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code></div>
+  const c = res.completion;
+  const completionBadge = c ? `<span class="cmp-score ${c.passed?"pass":"fail"}" title="${esc(c.why||"")}">${c.passed?"solved":"failed"}${c.passed?"":" · "+esc(c.why||"")}</span>` : "";
+  const q = res.quality;
+  const qualityBadge = q && q.score!=null ? `<span class="cmp-q ${q.score>=7?"hi":q.score>=4?"mid":"lo"}" title="${esc(q.reason||"")} — judge: ${esc(q.judge||"")}">K3 ${q.score}/10</span>` : "";
+  return `<div class="cmp-col${c?(c.passed?" solved":" failed"):""}">
+    <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${completionBadge}${qualityBadge}</div>
     <div class="cmp-stats">
       ${gateBadgeHtml}
       <span class="chip ${compareState.sortBy==="latency"?"sorted":""}">${secs(res.latency_ms)}</span>
@@ -241,7 +255,9 @@ VIEWS.compare = function(d){
   return `<div class="card">
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
       <span class="meta">One message, every brain at once — same harness, isolated homes, real receipts (gate · latency · cost · tools). Compare, don't guess.</span>
-      <button class="save cmp-race" style="margin-left:auto" onclick="runCompare()" ${(!n||compareState.running)?"disabled":""}>
+      <label class="cmp-judge ${compareState.judge?"on":""}" style="margin-left:auto" title="Grade each reply 0-10 with kimi-k3 (one extra API call per column)">
+        <input type="checkbox" ${compareState.judge?"checked":""} onchange="toggleJudge()"> grade with K3</label>
+      <button class="save cmp-race" onclick="runCompare()" ${(!n||compareState.running)?"disabled":""}>
         ${compareState.running?"Racing…":`Race ${n} model${n===1?"":"s"}`}</button>
     </div>
     <textarea id="cmp-msg" class="cmp-input" rows="2" onfocus="markEditing()"
@@ -254,9 +270,80 @@ VIEWS.compare = function(d){
 // across every logged race, then the list of recent races (click to reopen).
 // Data comes from GET /api/compare/history (the arena's own JSONL, never the
 // agent's real state).
+// The scoreboard the board shows = the server's totals (finished races) PLUS,
+// while a race is still running, its already-finished columns folded in — so a
+// model's numbers land the moment ITS column finishes, instead of waiting for
+// the slowest model in the race. No double count: the running race isn't in the
+// server totals yet, and once it completes running=false so we stop folding it.
+function boardAggregate(){
+  const map = {};
+  (compareState.aggregate || []).forEach(a => { map[a.spec] = {...a}; });
+  if (compareState.running){
+    (compareState.order || []).forEach(spec => {
+      const r = (compareState.results || {})[spec];
+      if (!r || r.streaming) return;   // column not finished yet
+      const a = map[spec] || (map[spec] = {spec, provider: r.provider, model: r.model,
+        runs: 0, ok: 0, total_latency_ms: 0, total_tokens_in: 0, total_tokens_out: 0,
+        total_tokens: 0, total_cost_usd: 0, cases_passed: 0, cases_scored: 0,
+        _qsum: 0, quality_n: 0, quality_avg: null});
+      a.runs += 1;
+      if (!r.error){
+        a.ok += 1;
+        a.total_latency_ms += r.latency_ms || 0;
+        a.total_tokens_in += r.tokens_in || 0;
+        a.total_tokens_out += r.tokens_out || 0;
+        a.total_tokens = a.total_tokens_in + a.total_tokens_out;
+        a.total_cost_usd = Math.round((a.total_cost_usd + (r.cost_usd || 0)) * 10000) / 10000;
+      }
+      if (r.completion){ a.cases_scored += 1; a.cases_passed += r.completion.passed ? 1 : 0; }
+      if (r.quality && r.quality.score!=null){
+        // reconstruct the running sum from the server row's avg on first fold
+        if (a._qsum===undefined){ a._qsum = (a.quality_avg||0) * (a.quality_n||0); }
+        a._qsum += r.quality.score; a.quality_n = (a.quality_n||0) + 1;
+        a.quality_avg = Math.round(a._qsum / a.quality_n * 10) / 10;
+      }
+    });
+  }
+  return Object.values(map);
+}
+// The reveal: total cost (x) vs how good (y). Y is K3's grade when we have it,
+// else the completion pass-rate — so "cheap AND good" sits top-LEFT. This is the
+// picture the whole arena is built to draw ("is opus 20x the price 20x better?").
+function costQualityScatter(agg){
+  const useQ = agg.some(a => a.quality_avg != null);
+  const pts = agg.map(a => {
+    let y = null;
+    if (useQ && a.quality_avg != null) y = a.quality_avg;                       // 0-10
+    else if (!useQ && a.cases_scored) y = a.cases_passed / a.cases_scored * 10; // 0-10
+    return {a, x: a.total_cost_usd || 0, y};
+  }).filter(p => p.y != null && p.x > 0);
+  if (pts.length < 2) return "";
+  const W = 640, H = 300, L = 46, R = 150, T = 16, B = 36;
+  const xmax = Math.max(...pts.map(p => p.x)) * 1.08 || 1;
+  const px = x => L + (x / xmax) * (W - L - R);
+  const py = y => H - B - (y / 10) * (H - T - B);
+  const gr = [0,2,4,6,8,10].map(v => `<line x1="${L}" y1="${py(v)}" x2="${W-R}" y2="${py(v)}" class="sc-grid"/>
+    <text x="${L-6}" y="${py(v)+3}" class="sc-tick" text-anchor="end">${v}</text>`).join("");
+  const dots = pts.sort((a,b)=>a.x-b.x).map(p => {
+    const good = p.y >= 7, mid = p.y >= 4;
+    const cls = good ? "hi" : mid ? "mid" : "lo";
+    return `<circle cx="${px(p.x).toFixed(1)}" cy="${py(p.y).toFixed(1)}" r="5" class="sc-dot ${cls}"/>
+      <text x="${(px(p.x)+9).toFixed(1)}" y="${(py(p.y)+3).toFixed(1)}" class="sc-lbl">${esc(p.a.model)} · ${money(p.x)}</text>`;
+  }).join("");
+  return `<div class="card" style="padding:12px 14px;margin-top:14px">
+    <div class="meta" style="margin-bottom:4px">Cost vs ${useQ?"quality (K3 grade)":"completion"} — cheap &amp; good is top-left</div>
+    <svg viewBox="0 0 ${W} ${H}" class="scatter" preserveAspectRatio="xMidYMid meet">
+      <line x1="${L}" y1="${T}" x2="${L}" y2="${H-B}" class="sc-axis"/>
+      <line x1="${L}" y1="${H-B}" x2="${W-R}" y2="${H-B}" class="sc-axis"/>
+      ${gr}${dots}
+      <text x="${(L+(W-R-L)/2).toFixed(0)}" y="${H-6}" class="sc-tick" text-anchor="middle">total cost →</text>
+      <text x="14" y="${(T+(H-B-T)/2).toFixed(0)}" class="sc-tick" text-anchor="middle" transform="rotate(-90 14 ${(T+(H-B-T)/2).toFixed(0)})">${useQ?"K3 grade":"completion"} →</text>
+    </svg></div>`;
+}
 function compareHistoryHtml(){
-  const agg = compareState.aggregate || [];
+  const agg = boardAggregate();
   const hist = compareState.history || [];
+  const raceCount = hist.length + (compareState.running ? 1 : 0);
   if (!agg.length && !hist.length) return "";
   // Cumulative totals across all races. Click a column header to sort by it —
   // ascending first, click again to flip (arrow shows the active column + dir).
@@ -266,14 +353,20 @@ function compareHistoryHtml(){
   const rows = [...agg].sort((x, y) => ((x[bs.key] ?? 0) - (y[bs.key] ?? 0)) * (bs.dir === "asc" ? 1 : -1));
   const scoreboard = agg.length ? `
     <h2 style="margin-top:22px;display:flex;align-items:center;gap:10px">Scoreboard
-      <span class="meta" style="font-weight:400">— totals across ${hist.length} race${hist.length===1?"":"s"}</span>
+      <span class="meta" style="font-weight:400">— totals across ${raceCount} race${raceCount===1?"":"s"}</span>
       <a class="reveal" style="margin-left:auto;font-size:12px" onclick="clearCompareHistory()">clear</a></h2>
+    ${costQualityScatter(agg)}
     <div class="card" style="padding:4px 8px"><table>
-      <tr><th>model</th>${th("runs","races")}<th>ok</th>${th("total_latency_ms","total time")}${th("total_tokens","total tokens")}${th("total_cost_usd","total cost")}</tr>
+      <tr><th>model</th>${th("cases_passed","solved")}${th("quality_avg","K3 grade")}${th("runs","races")}<th>ok</th>${th("total_latency_ms","total time")}${th("total_tokens_in","in tok")}${th("total_tokens_out","out tok")}${th("total_tokens","total tok")}<th title="list price per million tokens, input / output">rate $/M</th>${th("total_cost_usd","total cost")}</tr>
       ${rows.map(a=>`<tr>
         <td><span class="mm-prov">${esc(a.provider)}</span> <code>${esc(a.model)}</code></td>
+        <td>${a.cases_scored?`<span class="cmp-score ${a.cases_passed===a.cases_scored?"pass":(a.cases_passed?"part":"fail")}">${a.cases_passed}/${a.cases_scored}</span>`:'<span class="meta">—</span>'}</td>
+        <td>${a.quality_avg!=null?`<span class="cmp-q ${a.quality_avg>=7?"hi":a.quality_avg>=4?"mid":"lo"}">${a.quality_avg}</span>`:'<span class="meta">—</span>'}</td>
         <td class="meta">${a.runs}</td><td class="meta">${a.ok}/${a.runs}</td>
-        <td class="meta">${secs(a.total_latency_ms)}</td><td class="meta">${a.total_tokens}</td>
+        <td class="meta">${secs(a.total_latency_ms)}</td>
+        <td class="meta">${a.total_tokens_in}</td><td class="meta">${a.total_tokens_out}</td>
+        <td class="meta">${a.total_tokens}</td>
+        <td class="meta">${a.rate_in!=null?`$${a.rate_in}/$${a.rate_out}`:"—"}</td>
         <td class="meta" style="color:var(--good)">${money(a.total_cost_usd)}</td></tr>`).join("")}
     </table></div>` : "";
   const recent = hist.length ? `

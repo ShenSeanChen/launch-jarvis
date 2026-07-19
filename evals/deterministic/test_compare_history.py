@@ -67,7 +67,10 @@ def test_aggregate_totals_over_successful_runs_only(tmp_path):
     agg = {a["spec"]: a for a in ch.aggregate(runs)}
     m = agg["k:m"]
     assert m["runs"] == 2 and m["ok"] == 2
-    assert m["total_latency_ms"] == 4000 and m["total_tokens"] == 800 and m["total_cost_usd"] == 0.08
+    assert m["total_latency_ms"] == 4000 and m["total_cost_usd"] == 0.08
+    # tokens split in/out and still total; helper sends tin=tout each run (100+300)
+    assert m["total_tokens_in"] == 400 and m["total_tokens_out"] == 400
+    assert m["total_tokens"] == 800 == m["total_tokens_in"] + m["total_tokens_out"]
     n = agg["g:n"]
     assert n["runs"] == 1 and n["ok"] == 0          # errored run counted, adds nothing to totals
     assert n["total_cost_usd"] == 0.0

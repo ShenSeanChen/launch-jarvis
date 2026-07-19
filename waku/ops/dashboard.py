@@ -29,7 +29,7 @@ from pathlib import Path
 
 from waku.config import load_settings
 from waku.db import connect
-from waku.ops import compare_history
+from waku.ops import compare_history, judge as judge_mod, scoring
 
 PORT = 7777
 # The frontend lives in its own files (static/index.html + style.css + app.js),
@@ -244,7 +244,7 @@ def compare_models(payload: dict) -> dict:
     return {"ok": True, "message": message, "results": results}
 
 
-def compare_stream(message: str, specs: list, emit) -> None:
+def compare_stream(message: str, specs: list, emit, judge: bool = False) -> None:
     """Race the models and stream each one's harness LIVE — gate decision and
     tool calls, per model — so every column plays out like the chat dock instead
     of a static 'racing…'. Each contestant runs the REAL loop (tools included) in
@@ -266,6 +266,10 @@ def compare_stream(message: str, specs: list, emit) -> None:
 
     lock = threading.Lock()
     collected: list = []   # per-model results, saved to the compare history at the end
+    # If this prompt is a known battery case, every column gets a deterministic
+    # Completion score (did the right tool fire, with the right args, enough
+    # times). Free-form prompts still race — they just don't get a score.
+    case = scoring.case_for_message(message)
 
     def send(kind, ev):
         with lock:
@@ -295,6 +299,10 @@ def compare_stream(message: str, specs: list, emit) -> None:
             settings = Settings(provider=provider, model=model, small_model="",
                                 home=home, apple_calendar=False)
             app = Waku(settings=settings)
+            # A scored case may pre-load a fact (e.g. "applies memory") so every
+            # model starts from the same state the checklist assumes.
+            if case and case.get("setup_fact"):
+                app.memory.facts.add(case["setup_fact"]["subject"], case["setup_fact"]["content"])
             t0 = time.perf_counter()
             result = app.respond(message, source="compare", observer=obs)
             ms = int((time.perf_counter() - t0) * 1000)
@@ -309,11 +317,19 @@ def compare_stream(message: str, specs: list, emit) -> None:
                         pass
             pin, pout = price_for(provider, settings.model)
             cost = round(tin / 1e6 * pin + tout / 1e6 * pout, 4)
+            completion = None
+            if case:
+                passed, why = scoring.check_case(case, result.tool_calls)
+                completion = {"passed": passed, "why": why, "case": case["id"]}
+            # Quality: K3 grades the reply 0-10 when judging is on (own API call,
+            # so it's opt-in per race). A judge hiccup returns None, never fails.
+            quality = judge_mod.judge_reply(message, result.reply) if judge else None
             send("result", {"spec": spec, "provider": provider, "model": settings.model,
                             "reply": result.reply, "gate": (gate or None),
                             "iterations": result.iterations, "latency_ms": ms,
                             "tools": [{"tool": c["tool"]} for c in result.tool_calls],
-                            "tokens_in": tin, "tokens_out": tout, "cost_usd": cost})
+                            "tokens_in": tin, "tokens_out": tout, "cost_usd": cost,
+                            "completion": completion, "quality": quality})
         except Exception as exc:
             send("result", {"spec": spec, "provider": provider, "model": model, "error": str(exc)[:200]})
 
@@ -352,15 +368,32 @@ PRICING = {
 _price_cache: dict[str, tuple[float, float]] = {}
 
 
-# Known per-model prices for endpoints with no listable catalog (the anthropic
-# wire has no /models). Checked before the provider-level fallback so e.g. a
-# kimi-k3 run ($3/$15) isn't priced at the kimi-k2.7 rate ($0.6/$2.5).
+# Known per-model prices ($/M in, out) for endpoints with no listable catalog
+# (the anthropic wire has no /models), checked before the provider-level
+# fallback. Within a provider, models diverge a LOT — fable-5 is ~2x opus,
+# gemini-flash undercuts gemini-pro — so pricing per *model* is the only honest
+# way; a provider-level guess made fable-5 look cheaper than opus. Rates are
+# standard short-context list prices (cache/batch discounts not modelled),
+# fact-checked Jul 2026 against each vendor's pricing page. See docs/benchmarks.md.
 MODEL_PRICING = {
-    "kimi-k3": (3.0, 15.0),          # per Moonshot tech blog, Jul 2026
-    "kimi-k2.7": (0.6, 2.5),
+    # Anthropic — platform.claude.com/docs/.../pricing
     "claude-opus-4-8": (5.0, 25.0),
+    "claude-fable-5": (10.0, 50.0),            # Mythos-class flagship, ~2x opus
     "claude-sonnet-5": (3.0, 15.0),
     "claude-haiku-4-5-20251001": (1.0, 5.0),
+    # OpenAI — openai.com pricing (Sol = flagship; chat-latest = non-reasoning)
+    "gpt-5.6-sol": (5.0, 30.0),
+    "gpt-5.3-chat-latest": (1.75, 14.0),
+    # Google Gemini — ai.google.dev pricing (standard <200k tier)
+    "gemini-3.1-pro-preview": (2.0, 12.0),
+    "gemini-3.5-flash": (1.5, 9.0),
+    # Moonshot Kimi — platform.kimi.ai (highspeed = 2x the standard k2.7 rate)
+    "kimi-k3": (3.0, 15.0),
+    "kimi-k2.7-code-highspeed": (1.9, 8.0),
+    "kimi-k2.7": (0.95, 4.0),
+    # xAI Grok — docs.x.ai/developers/pricing
+    "grok-4.5": (2.0, 6.0),
+    "grok-4.3": (1.25, 2.5),
 }
 
 
@@ -1288,8 +1321,22 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/compare/history":
             home = load_settings().home
             runs = compare_history.load_runs(home)
+            # Reprice every stored result from its tokens with the CURRENT price
+            # table, the way usage_summary repricing works — so a pricing fix
+            # corrects past races too, instead of leaving stale $ baked in at
+            # write time. The store keeps raw tokens for exactly this reason.
+            for run in runs:
+                for r in run.get("results", []):
+                    if r.get("error"):
+                        continue
+                    pin, pout = price_for(r.get("provider", ""), r.get("model", ""))
+                    r["cost_usd"] = round((r.get("tokens_in") or 0) / 1e6 * pin
+                                          + (r.get("tokens_out") or 0) / 1e6 * pout, 4)
+            agg = compare_history.aggregate(runs)
+            for row in agg:   # label each row with the rate the cost was computed at
+                row["rate_in"], row["rate_out"] = price_for(row["provider"], row["model"])
             self._send(json.dumps({"runs": runs[-20:][::-1],   # newest first for display
-                                   "aggregate": compare_history.aggregate(runs)}).encode(),
+                                   "aggregate": agg}).encode(),
                        "application/json")
         elif self.path.startswith("/api/models"):
             from urllib.parse import parse_qs, urlparse
@@ -1369,7 +1416,8 @@ class Handler(BaseHTTPRequestHandler):
                 except (BrokenPipeError, ConnectionResetError):
                     pass
             try:
-                compare_stream((payload.get("message") or "").strip(), payload.get("models") or [], emit)
+                compare_stream((payload.get("message") or "").strip(), payload.get("models") or [],
+                               emit, judge=bool(payload.get("judge")))
             except Exception as exc:
                 emit("done", {"error": f"{type(exc).__name__}: {exc}"})
             return

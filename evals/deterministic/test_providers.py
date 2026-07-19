@@ -120,6 +120,15 @@ def test_price_for_layers_model_over_provider():
     from waku.ops.dashboard import MODEL_PRICING, PRICING, price_for
 
     assert price_for("kimi", "kimi-k3") == MODEL_PRICING["kimi-k3"] == (3.0, 15.0)
-    assert price_for("kimi", "kimi-k2.7") == (0.6, 2.5)
+    assert price_for("kimi", "kimi-k2.7") == (0.95, 4.0)
     assert price_for("kimi", "some-future-model") == PRICING["kimi"]
     assert price_for("openrouter", "whatever:free") == (0.0, 0.0)
+
+    # Regression: within a provider, models diverge hugely — fable-5 is priced at
+    # $10/$50, ~2x opus's $5/$25. A provider-level fallback once made fable-5 look
+    # CHEAPER than opus on the scoreboard; each must carry its own per-model rate.
+    assert price_for("anthropic", "claude-fable-5") == (10.0, 50.0)
+    assert price_for("anthropic", "claude-opus-4-8") == (5.0, 25.0)
+    fable_in, fable_out = price_for("anthropic", "claude-fable-5")
+    opus_in, opus_out = price_for("anthropic", "claude-opus-4-8")
+    assert fable_in > opus_in and fable_out > opus_out   # fable is never cheaper

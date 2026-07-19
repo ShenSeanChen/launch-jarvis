@@ -1218,6 +1218,13 @@ def apply_settings(payload: dict) -> dict:
             updates["WAKU_SMALL_MODEL"] = ""
     for k, v in (payload.get("keys") or {}).items():
         if k in writable and v:  # only non-empty keys overwrite
+            if k == "NOTION_EPISODES_DATABASE_ID":
+                from waku.memory.episodic.notion_store import normalize_database_id
+
+                try:
+                    v = normalize_database_id(v)
+                except ValueError as exc:
+                    return {"error": str(exc)}
             updates[k] = v
     for k, v in updates.items():
         if k in writable:

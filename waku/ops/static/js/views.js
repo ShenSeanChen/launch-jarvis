@@ -291,10 +291,10 @@ const VIEWS = {
         ${st.notion_token_set?`<span class="srcpill" style="background:var(--good-soft);color:var(--good)">set ····${esc(st.notion_token_last4)}</span>`
                              :`<span class="srcpill apple">not set</span>`}</span>
         <input type="password" data-key="NOTION_TOKEN" placeholder="${st.notion_token_set?"key on file — blank keeps it":"paste integration token"}"></label>
-      <label class="fld"><span>Notion database id <span class="meta">(NOTION_EPISODES_DATABASE_ID)</span>
+      <label class="fld"><span>Notion database link <span class="meta">(paste the link from Notion)</span>
         ${st.notion_db_set?`<span class="srcpill" style="background:var(--good-soft);color:var(--good)">set ····${esc(st.notion_db_last4)}</span>`
                           :`<span class="srcpill apple">not set</span>`}</span>
-        <input data-key="NOTION_EPISODES_DATABASE_ID" placeholder="${st.notion_db_set?"id on file — blank keeps it":"32-char id from the database URL"}"></label>
+        <input data-key="NOTION_EPISODES_DATABASE_ID" placeholder="${st.notion_db_set?"database link on file — blank keeps it":"paste the database link"}"></label>
       <div style="margin-top:12px"><button class="save" onclick="saveSettings()">Save &amp; switch</button>
         <span class="meta" style="margin-left:10px">rebuilds the agent in-process — a bad token leaves notion selected with the error shown on Memory ▸ Episodic; fix the token or switch back</span></div>
     </div>
@@ -468,4 +468,3 @@ const VIEWS = {
     return h;
   },
 };
-

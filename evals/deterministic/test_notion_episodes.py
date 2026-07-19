@@ -24,7 +24,7 @@ class _FakeNotionClient:
         self._created_count = 0
 
     def _retrieve(self, *, database_id: str) -> dict:
-        assert database_id == "test-db-id"
+        assert database_id in ("test-db-id", "3a14b87b9c3280afac7ae76e389e4ba7")
         return {"data_sources": [{"id": "test-ds-id"}]}
 
     def _create(self, *, parent: dict, properties: dict) -> dict:
@@ -52,6 +52,7 @@ class _FakeNotionClient:
 
 from waku.memory.episodic.notion_store import (  # noqa: E402
     NotionEpisodeStore,
+    normalize_database_id,
 )
 
 
@@ -157,6 +158,28 @@ def test_constructor_requires_token_and_database_id(monkeypatch):
 
     with pytest.raises(ValueError, match="NOTION_EPISODES_DATABASE_ID"):
         NotionEpisodeStore(token="test-token", database_id=None)
+
+
+def test_constructor_accepts_a_copied_database_link(monkeypatch):
+    fake_module = types.ModuleType("notion_client")
+    fake_module.Client = _FakeNotionClient
+    monkeypatch.setitem(sys.modules, "notion_client", fake_module)
+
+    store = NotionEpisodeStore(
+        token="test-token",
+        database_id=(
+            "https://app.notion.com/p/3a14b87b9c3280afac7ae76e389e4ba7"
+            "?v=3a14b87b9c32802abf0f000caaf78263"
+        ),
+    )
+    assert store.database_id == "3a14b87b9c3280afac7ae76e389e4ba7"
+
+
+def test_normalize_database_id_uses_path_not_view_id():
+    assert normalize_database_id(
+        "https://app.notion.com/p/3a14b87b9c3280afac7ae76e389e4ba7"
+        "?v=3a14b87b9c32802abf0f000caaf78263"
+    ) == "3a14b87b9c3280afac7ae76e389e4ba7"
 
 
 def test_module_imports_without_notion_client_installed():

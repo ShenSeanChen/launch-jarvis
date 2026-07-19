@@ -16,6 +16,24 @@ from __future__ import annotations
 
 import os
 import re
+from urllib.parse import urlparse
+
+
+def normalize_database_id(value: str) -> str:
+    """Accept a Notion database ID or a copied database URL.
+
+    Notion puts the database object ID in the URL path and a view ID in the
+    ``v`` query parameter. Keeping this conversion here lets every entry point
+    accept the link users naturally copy from Notion.
+    """
+    value = value.strip()
+    parsed = urlparse(value)
+    if parsed.scheme and parsed.netloc:
+        match = re.search(r"(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])", parsed.path.lower())
+        if not match:
+            raise ValueError("Notion database link must include a database ID in its path")
+        return match.group(0)
+    return value
 
 
 class NotionEpisodeStore:
@@ -23,7 +41,8 @@ class NotionEpisodeStore:
         from notion_client import Client
 
         self.token = token or os.environ.get("NOTION_TOKEN")
-        self.database_id = database_id or os.environ.get("NOTION_EPISODES_DATABASE_ID")
+        raw_database_id = database_id or os.environ.get("NOTION_EPISODES_DATABASE_ID", "")
+        self.database_id = normalize_database_id(raw_database_id) if raw_database_id else ""
         if not self.token:
             raise ValueError(
                 "Notion token required: pass token= or set NOTION_TOKEN environment variable"

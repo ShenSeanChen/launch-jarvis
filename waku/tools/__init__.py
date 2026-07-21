@@ -32,7 +32,7 @@ def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) ->
     # Experimental tools — off by default; opt in with WAKU_EXPERIMENTAL=1.
     # delegate_task (sub-agents via pi) is live; terminal/browser/cron are
     # still skeletons that report "coming soon".
-    if os.getenv("WAKU_EXPERIMENTAL", "") in ("1", "true", "yes"):
+    if getattr(settings, "experimental", False) or os.getenv("WAKU_EXPERIMENTAL", "") in ("1", "true", "yes"):
         from waku.tools import experimental
 
         for t in experimental.make_tools(settings):

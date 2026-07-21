@@ -133,10 +133,10 @@
   .arch .loopbox{fill:none;stroke:var(--accent);stroke-width:1.5}
   .arch .memgroup{fill:var(--accent-soft);opacity:.4;stroke:var(--line2);stroke-width:1;stroke-dasharray:5 4}
   .arch .gate{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.2}
-  .arch .nt{fill:var(--ink);font-size:12.5px;font-weight:600}
-  .arch .ns{fill:var(--ink2);font-size:10.5px}
-  .arch .grp{fill:var(--ink3);font-size:10px;font-weight:700;letter-spacing:.07em}
-  .arch .fl{fill:var(--ink3);font-size:9.5px}
+  .arch .nt{fill:var(--ink);font-size:14px;font-weight:600}
+  .arch .ns{fill:var(--ink2);font-size:11.5px}
+  .arch .grp{fill:var(--ink3);font-size:11px;font-weight:700;letter-spacing:.06em}
+  .arch .fl{fill:var(--ink3);font-size:10.5px}
   .arch .flow{fill:none;stroke:var(--ink3);stroke-width:1.3;marker-end:url(#arr)}
   .arch .flow.dash{stroke-dasharray:4 3;opacity:.75}
   .arch .head{fill:var(--ink3)}
@@ -196,8 +196,46 @@
   .sessbtn{background:var(--panel);border:1px solid var(--line2);border-radius:7px;color:var(--ink2);
            padding:5px 11px;font-size:12.5px;cursor:pointer}
   .sessbtn:hover{border-color:var(--accent);color:var(--accent)}
+  .teletoggle.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+  /* per-turn stats (gate/seconds/iters/tools) hide together when toggled off */
+  body.no-tele .chatlog .tele{display:none}
   .sessmenu{position:absolute;z-index:30;background:var(--panel);border:1px solid var(--line2);border-radius:10px;
             box-shadow:0 8px 30px rgba(0,0,0,.28);width:300px;max-height:340px;overflow-y:auto;padding:6px}
+  /* mini model switcher: a pill in the chat header + its dropdown */
+  .modelchip{margin-left:auto;display:inline-flex;align-items:center;gap:6px;max-width:150px;
+             background:var(--accent-soft);border:1px solid var(--line2);border-radius:99px;
+             color:var(--ink);padding:4px 9px;font-size:12px;cursor:pointer;line-height:1.2}
+  .modelchip:hover{border-color:var(--accent)}
+  .modelchip .mc-dot{width:6px;height:6px;border-radius:99px;background:var(--good);flex-shrink:0}
+  .modelchip .mc-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+                      font-family:var(--mono);font-size:11px}
+  .modelchip .mc-caret{color:var(--ink3);font-size:9px;flex-shrink:0}
+  .modelmenu{width:250px}
+  .modelmenu .mm-h{font-size:10.5px;color:var(--ink3);text-transform:uppercase;letter-spacing:.06em;padding:5px 10px 4px}
+  .modelmenu .mm-load{padding:8px 10px;color:var(--ink3);font-size:12px}
+  .modelmenu .mm-id{font-family:var(--mono);font-size:12px}
+  .modelmenu .mm-free{font-size:9.5px;color:var(--good);border:1px solid var(--good);border-radius:99px;
+                      padding:0 5px;margin-left:6px;vertical-align:1px}
+  .modelmenu .mm-f{font-size:11px;color:var(--ink3);padding:8px 10px 4px;border-top:1px solid var(--line);margin-top:4px}
+  .modelmenu .mm-f code{font-size:11px;background:none;padding:0}
+  .modelmenu .mm-f a{color:var(--accent);text-decoration:none}
+  .modelmenu .mm-prov{font-size:9.5px;color:var(--ink3);text-transform:uppercase;letter-spacing:.05em;margin-right:5px}
+  .modelmenu .mm-def{font-size:9.5px;color:var(--accent);border:1px solid var(--accent);border-radius:99px;
+                     padding:0 5px;margin-left:6px;vertical-align:1px}
+  .pinrow{display:flex;align-items:center;gap:8px;padding:6px 2px;font-size:12.5px;border-bottom:1px solid var(--line)}
+  .pinrow:last-of-type{border-bottom:none}
+  .pinrow.on{background:var(--accent-soft);border-radius:7px;padding-left:8px;padding-right:8px}
+  .pinrow .mm-prov{font-size:9.5px;color:var(--ink3);text-transform:uppercase;letter-spacing:.05em;min-width:64px}
+  .pinstar{cursor:pointer;color:var(--ink3);font-size:15px;line-height:1;text-decoration:none;flex-shrink:0}
+  .pinstar.on{color:var(--accent)}
+  .pinstar:hover{color:var(--accent)}
+  .addmodel{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}
+  .addmodel select{background:var(--bg);border:1px solid var(--line2);border-radius:8px;padding:8px 10px;
+          color:var(--ink);font-size:13px;outline:none;max-width:100%}
+  .addmodel #add-model{flex:1;min-width:180px}
+  .addmodel input{flex:1;min-width:180px;background:var(--bg);border:1px solid var(--line2);border-radius:8px;
+          padding:8px 12px;color:var(--ink);font-size:13px;outline:none}
+  .addmodel select:focus,.addmodel input:focus{border-color:var(--accent)}
   .sessitem{padding:8px 10px;border-radius:7px;cursor:pointer;font-size:12.5px}
   .sessitem:hover{background:var(--accent-soft)}
   .sessitem.on{background:var(--accent-soft);color:var(--accent)}
@@ -262,6 +300,7 @@
   .stage{font-size:11px;padding:2px 9px;border-radius:99px;border:1px solid var(--line2);color:var(--ink3)}
   .stage.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
   .stage.done{border-color:var(--good);color:var(--good)}
+  .stage.subagent{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);font-weight:600}
   table{width:100%;border-collapse:collapse;font-size:13px}
   td,th{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
   tr:last-child td{border-bottom:none}
@@ -269,3 +308,71 @@
   .empty{color:var(--ink3);font-style:normal;font-size:13px}
   code{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid var(--line);
        padding:1px 5px;border-radius:4px}
+  /* Model arena (Compare tab): message + model picks, then a scrolling row of
+     one result column per model. */
+  .cmp-input{width:100%;background:var(--bg);border:1px solid var(--line2);border-radius:8px;
+       padding:10px 12px;color:var(--ink);font-size:13.5px;font-family:inherit;outline:none;resize:vertical}
+  .cmp-input:focus{border-color:var(--accent)}
+  .cmp-picks{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:center}
+  .cmp-pick{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--ink2);
+       border:1px solid var(--line2);border-radius:99px;padding:4px 10px;cursor:pointer}
+  .cmp-pick.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+  .cmp-pick input{margin:0}
+  /* Responsive: as many ~300px columns as fit, then wrap to the next row. */
+  .cmp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
+       gap:12px;margin-top:12px;align-items:start}
+  .cmp-col{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+       padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+  .cmp-col.err{border-color:var(--bad)}
+  .cmp-h{display:flex;align-items:center;gap:6px;font-size:13px}
+  .cmp-stats{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+  .chip{font-size:11px;color:var(--ink2);border:1px solid var(--line2);border-radius:99px;padding:1px 8px}
+  .chip.money{color:var(--good);border-color:var(--good)}
+  .chip.sorted{color:var(--accent);border-color:var(--accent);background:var(--accent-soft);font-weight:600}
+  .cmp-reply{margin-top:2px;font-size:13px;max-height:340px;overflow-y:auto}
+  .cmp-race{padding:5px 14px;font-size:12.5px}
+  .cmp-th{cursor:pointer;white-space:nowrap}
+  .cmp-th:hover{color:var(--ink)}
+  .cmp-th.on{color:var(--accent)}
+  .cmp-score{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;
+    font-weight:600;letter-spacing:.02em;white-space:nowrap;vertical-align:middle}
+  .cmp-score.pass{background:var(--good-soft);color:var(--good)}
+  .cmp-score.fail{background:var(--bad-soft);color:var(--bad)}
+  .cmp-score.part{background:#c8951f22;color:#c8951f}
+  .cmp-col.solved{box-shadow:inset 3px 0 0 var(--good)}
+  .cmp-col.failed{box-shadow:inset 3px 0 0 var(--bad)}
+  .cmp-q{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;
+    font-weight:600;white-space:nowrap;vertical-align:middle}
+  .cmp-q.hi{background:var(--good-soft);color:var(--good)}
+  .cmp-q.mid{background:#c8951f22;color:#c8951f}
+  .cmp-q.lo{background:var(--bad-soft);color:var(--bad)}
+  .cmp-grade1{margin-left:auto;font-size:11px;white-space:nowrap;flex-shrink:0}
+  .cmp-judge{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--ink3);
+    cursor:pointer;white-space:nowrap;padding:4px 8px;border-radius:8px;border:1px solid var(--line)}
+  .cmp-judge.on{color:var(--accent);border-color:var(--accent)}
+  .cmp-judge input{margin:0}
+  .cmp-judge select{font:inherit;font-size:12px;color:var(--ink);background:var(--card);
+    border:1px solid var(--line);border-radius:6px;padding:1px 4px;margin-left:2px;cursor:pointer}
+  .cmp-judge select:disabled{opacity:.5;cursor:default}
+  .scatter{width:100%;height:auto;display:block}
+  .scatter text{font-family:inherit}   /* match the page's sans, not SVG's default serif */
+  .scatter .sc-axis{stroke:var(--line);stroke-width:1}
+  .scatter .sc-grid{stroke:var(--line);stroke-width:1;opacity:.4}
+  .scatter .sc-tick{fill:var(--ink3);font-size:10px}
+  /* the y-axis label carries the grading criteria on hover (native <title>) */
+  .scatter .sc-ylabel{text-decoration:underline dotted;fill:var(--ink2)}
+  /* a wide invisible hit-zone over the y label so the criteria tooltip is easy to hover */
+  .scatter .sc-yhit{fill:transparent;cursor:help;pointer-events:all}
+  .sc-tip{position:fixed;display:none;z-index:9999;pointer-events:none;max-width:340px;
+    white-space:pre-line;background:var(--panel);color:var(--ink);border:1px solid var(--line);
+    border-radius:8px;padding:8px 11px;font-size:12px;line-height:1.45;
+    box-shadow:0 8px 30px rgba(0,0,0,.28)}
+  .scatter .sc-lbl{fill:var(--ink2);font-size:10.5px}
+  .scatter .sc-dot.hi{fill:var(--good)}
+  .scatter .sc-dot.mid{fill:#c8951f}
+  .scatter .sc-dot.lo{fill:var(--bad)}
+  .cmp-sortbar{display:flex;align-items:center;gap:6px;margin:2px 0 12px;font-size:12px;color:var(--ink3)}
+  .cmp-sortbtn{cursor:pointer;font-size:12px;color:var(--ink2);background:var(--bg);
+       border:1px solid var(--line2);border-radius:99px;padding:3px 12px}
+  .cmp-sortbtn:hover{border-color:var(--accent);color:var(--accent)}
+  .cmp-sortbtn.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);font-weight:600}

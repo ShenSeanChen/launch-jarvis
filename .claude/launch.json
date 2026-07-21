@@ -6,7 +6,7 @@
       "runtimeExecutable": ".venv/bin/python",
       "runtimeArgs": ["-m", "waku.ops.dashboard"],
       "port": 7777,
-      "autoPort": true
+      "autoPort": false
     },
     {
       "name": "phoenix-traces",

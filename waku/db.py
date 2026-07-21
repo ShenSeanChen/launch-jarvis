@@ -87,6 +87,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # which gateway a message came in through (cli / voice / telegram / dashboard)
         conn.execute("ALTER TABLE chat_log ADD COLUMN source TEXT DEFAULT 'cli'")
         conn.commit()
+    if "meta" not in cols:
+        # per-turn telemetry as JSON on the assistant row (gate decision,
+        # latency, iterations, tools) — so reopening a thread still shows how
+        # each answer was produced, not just the plain text.
+        conn.execute("ALTER TABLE chat_log ADD COLUMN meta TEXT")
+        conn.commit()
 
 
 def connect(home: Path, check_same_thread: bool = True) -> sqlite3.Connection:

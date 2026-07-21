@@ -2,8 +2,8 @@
 
 Hermetic: pi is NEVER actually spawned. subprocess.run and shutil.which are
 monkeypatched, so these run everywhere (CI included) with no node, no network.
-What's pinned: the exact argv (`pi -p <task>`), the outbox paper trail, and the
-honest strings for every failure mode (not installed / timeout / bad cwd)."""
+What's pinned: pi runs headless on the loop's OWN model, the outbox paper trail,
+and the honest strings for every failure mode (not installed / timeout / bad cwd)."""
 
 from __future__ import annotations
 
@@ -15,6 +15,15 @@ from waku.config import Settings
 from waku.tools import experimental
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _tmp_workspace(tmp_path, monkeypatch):
+    """Never let a delegate test write into the repo's ./waku_workspace."""
+    monkeypatch.setenv("WAKU_WORKSPACE", str(tmp_path / "ws"))
+
+
 def fake_run(record, stdout="Done. Created hello.py.", returncode=0):
     def run(argv, **kwargs):
         record["argv"] = argv
@@ -24,10 +33,12 @@ def fake_run(record, stdout="Done. Created hello.py.", returncode=0):
 
 
 def test_delegate_task_invokes_pi_print_mode(tmp_path, monkeypatch):
-    """Full-loop wiring: the model calls delegate_task → pi -p fires → the
-    result string and the outbox log both carry pi's answer."""
+    """Full-loop wiring: the model calls delegate_task → pi fires → a scratch task
+    lands in the dated workspace with a MANIFEST + pi transcript, and pi's answer
+    comes back in the tool result."""
     record = {}
     monkeypatch.setenv("WAKU_EXPERIMENTAL", "1")
+    monkeypatch.setenv("WAKU_WORKSPACE", str(tmp_path / "ws"))   # keep it out of the repo
     monkeypatch.setattr(experimental.shutil, "which", lambda _: "/fake/bin/pi")
     monkeypatch.setattr(experimental.subprocess, "run", fake_run(record))
 
@@ -40,11 +51,32 @@ def test_delegate_task_invokes_pi_print_mode(tmp_path, monkeypatch):
     result = app.respond("have pi create hello.py")
 
     assert [c["tool"] for c in result.tool_calls] == ["delegate_task"]
-    assert record["argv"] == ["/fake/bin/pi", "-p", "create hello.py"]
+    argv = record["argv"]
+    assert argv[0] == "/fake/bin/pi"
+    assert "-p" in argv and "create hello.py" in argv
+    assert "-a" in argv and "--no-session" in argv          # headless, non-interactive
     output = result.tool_calls[0]["output"]
-    assert "Done. Created hello.py." in output and "outbox" in output
-    logs = list((tmp_path / "home" / "outbox").glob("delegate-*.log"))
-    assert len(logs) == 1 and "create hello.py" in logs[0].read_text(encoding="utf-8")
+    assert "Done. Created hello.py." in output and "saved to" in output.lower()
+    # the run landed in the dated workspace with a manifest + transcript
+    manifests = list((tmp_path / "ws").rglob("MANIFEST.md"))
+    assert len(manifests) == 1 and "create hello.py" in manifests[0].read_text()
+    assert list((tmp_path / "ws").rglob("pi-transcript.log"))
+
+
+def test_delegate_runs_pi_on_the_calling_model(tmp_path, monkeypatch):
+    """The sub-agent codes with the loop's OWN brain — delegate_task passes this
+    model's provider/model/key to pi, so a per-model race actually compares
+    models (kimi's pi uses kimi, opus's pi uses opus)."""
+    record = {}
+    monkeypatch.setattr(experimental.shutil, "which", lambda _: "/fake/bin/pi")
+    monkeypatch.setattr(experimental.subprocess, "run", fake_run(record))
+    monkeypatch.setenv("MOONSHOT_API_KEY", "k")
+    tool = experimental.make_delegate_tool(Settings(home=tmp_path, provider="kimi", model="kimi-k3"))
+    tool.fn(task="write fizzbuzz")
+    argv = record["argv"]
+    assert "--provider" in argv and "moonshotai" in argv    # kimi -> pi's moonshotai
+    assert "--model" in argv and "kimi-k3" in argv
+    assert "--api-key" in argv
 
 
 def test_delegate_without_pi_returns_install_hint(tmp_path, monkeypatch):

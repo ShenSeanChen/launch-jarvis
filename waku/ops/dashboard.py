@@ -29,6 +29,7 @@ from pathlib import Path
 
 from waku.config import load_settings
 from waku.db import connect
+from waku.ops import compare_history, judge as judge_mod, scoring
 
 PORT = 7777
 # The frontend lives in its own files (static/index.html + style.css + app.js),
@@ -41,10 +42,51 @@ STATIC = Path(__file__).resolve().parent / "static"
 # so chats run one at a time — correct for a single-user local tool.
 _agent = None
 _agent_lock = threading.Lock()
+_dashboard_session = None  # this dashboard run's chat thread (dated; stable across refreshes)
+
+
+def _dash_session() -> str:
+    """The thread new dashboard chats belong to. Resolved once per process:
+    RESUME the most recent recent dashboard thread (so a restart keeps the chat
+    on screen), else start a fresh dated one. Never the eternal 'default'."""
+    global _dashboard_session
+    if _dashboard_session is None:
+        try:
+            conn = connect(load_settings().home)
+            _dashboard_session = _resume_or_new_session(conn)
+            conn.close()
+        except Exception:
+            _dashboard_session = datetime.now().strftime("dashboard-%Y%m%d-%H%M%S")
+    return _dashboard_session
+
+
+def _resume_or_new_session(conn) -> str:
+    """Pick this run's thread: RESUME the most recent dashboard thread if its
+    last message is still fresh (within the idle window), else start a new dated
+    one. Without this, every server restart minted a brand-new empty thread and
+    the visible chat 'vanished' (it was only parked under the old id). An idle
+    gap still rotates — that's _maybe_rotate_session's job once we're running."""
+    idle_min = int(os.getenv("WAKU_SESSION_IDLE_MINUTES", "60"))
+    # Match by source, not id prefix: "+ New chat" makes 's-...' ids, so a
+    # 'dashboard-%' filter would orphan those threads on restart. Every dashboard
+    # message is tagged source='dashboard' — that's the reliable signal.
+    row = conn.execute(
+        "SELECT session_id, MAX(created_at) AS last_at FROM chat_log "
+        "WHERE source='dashboard' GROUP BY session_id "
+        "ORDER BY last_at DESC LIMIT 1"
+    ).fetchone()
+    if row and row["last_at"]:
+        try:
+            last = datetime.strptime(row["last_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+            if idle_min <= 0 or (datetime.now(timezone.utc) - last).total_seconds() <= idle_min * 60:
+                return row["session_id"]
+        except ValueError:
+            pass
+    return datetime.now().strftime("dashboard-%Y%m%d-%H%M%S")
 
 
 def _get_agent():
-    global _agent
+    global _agent, _dashboard_session
     if _agent is None:
         from waku.app import Waku
 
@@ -52,7 +94,33 @@ def _get_agent():
         settings.ensure_home()
         conn = connect(settings.home, check_same_thread=False)
         _agent = Waku(settings=settings, conn=conn)
+        # A dashboard run resumes its last recent thread (so a restart/refresh
+        # keeps the chat on screen), or starts fresh if that thread is idle.
+        # Same id collect() reports, so the dock restores the right conversation.
+        _dashboard_session = _resume_or_new_session(conn)
+        _agent.session.session_id = _dashboard_session
     return _agent
+
+
+def _maybe_rotate_session(agent) -> None:
+    """A returning user should get a FRESH thread, not last week's. If the
+    current session's newest message is older than WAKU_SESSION_IDLE_MINUTES
+    (default 60), rotate to a new dated session id — the old thread stays one
+    click away in History. Live bug: a tester came back days later and their
+    new chat landed in a week-old 32-message thread."""
+    idle_min = int(os.getenv("WAKU_SESSION_IDLE_MINUTES", "60"))
+    if idle_min <= 0:
+        return
+    row = agent.conn.execute("SELECT MAX(created_at) FROM chat_log WHERE session_id=?",
+                             (agent.session.session_id,)).fetchone()
+    if not row or not row[0]:
+        return
+    try:  # sqlite datetime('now') is UTC "YYYY-MM-DD HH:MM:SS"
+        last = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return
+    if (datetime.now(timezone.utc) - last).total_seconds() > idle_min * 60:
+        agent.session.start_new(datetime.now().strftime("dashboard-%Y%m%d-%H%M%S"))
 
 
 def chat(message: str) -> dict:
@@ -62,6 +130,7 @@ def chat(message: str) -> dict:
     events: list[dict] = []
     with _agent_lock:
         agent = _get_agent()
+        _maybe_rotate_session(agent)
         start = datetime.now(timezone.utc)
         result = agent.respond(message, observer=lambda kind, ev: events.append({"kind": kind, **ev}),
                                source="dashboard")
@@ -97,6 +166,7 @@ def chat_stream(message: str, emit) -> None:
 
     with _agent_lock:
         agent = _get_agent()
+        _maybe_rotate_session(agent)
         start = datetime.now(timezone.utc)
         result = agent.respond(message, observer=observer, source="dashboard", stream=True)
         latency_ms = int((datetime.now(timezone.utc) - start).total_seconds() * 1000)
@@ -112,13 +182,267 @@ def chat_stream(message: str, emit) -> None:
         "consolidation": {"new_facts": cons["new_facts"]} if cons else None,
         "iterations": result.iterations,
         "latency_ms": latency_ms,
+        "model": agent.settings.model,   # which brain answered — shown per card
     })
+
+
+def _compare_one(message: str, spec: str) -> dict:
+    """Run ONE message through ONE model in a throwaway temp home (same isolation
+    as `make shootout`, so it never touches your real memory/calendar), and
+    return its receipts — reply, gate, tools, latency, tokens, cost. A broken
+    contestant returns an {error} dict; it never raises."""
+    import tempfile
+    import time
+
+    from waku.app import Waku
+    from waku.config import Settings
+
+    provider, _, model = spec.partition(":")
+    home = Path(tempfile.mkdtemp(prefix=f"compare-{provider}-"))
+    gate: dict = {}
+    try:
+        settings = Settings(provider=provider, model=model, small_model="",
+                            home=home, apple_calendar=False)
+        app = Waku(settings=settings)
+        t0 = time.perf_counter()
+        result = app.respond(message, source="compare",
+                             observer=lambda k, ev: gate.update(
+                                 decision=ev.get("decision"), reason=ev.get("reason"))
+                             if k == "gate" else None)
+        ms = int((time.perf_counter() - t0) * 1000)
+        tin = tout = 0
+        ledger = home / "usage.jsonl"
+        if ledger.exists():
+            for line in ledger.read_text().splitlines():
+                try:
+                    r = json.loads(line)
+                    tin, tout = tin + r.get("in", 0), tout + r.get("out", 0)
+                except json.JSONDecodeError:
+                    pass
+        pin, pout = price_for(provider, settings.model)
+        return {"spec": spec, "provider": provider, "model": settings.model, "reply": result.reply,
+                "gate": (gate or None), "iterations": result.iterations, "latency_ms": ms,
+                "tools": [{"tool": c["tool"]} for c in result.tool_calls],
+                "tokens_in": tin, "tokens_out": tout,
+                "cost_usd": round(tin / 1e6 * pin + tout / 1e6 * pout, 4)}
+    except (Exception, SystemExit) as exc:   # a broken contestant (incl. a missing
+        # key, which get_client raises as SystemExit) fails alone, not the whole race
+        return {"spec": spec, "provider": provider, "model": model, "error": str(exc)[:200]}
+
+
+def compare_models(payload: dict) -> dict:
+    """Race ONE message through several models AT ONCE (parallel threads) and
+    return every result together. Non-streaming; the dashboard uses the SSE
+    version so columns fill in as each finishes."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    message = (payload.get("message") or "").strip()
+    specs = payload.get("models") or []
+    if not message or not specs:
+        return {"error": "message and models required"}
+    with ThreadPoolExecutor(max_workers=min(len(specs), 6)) as ex:
+        results = list(ex.map(lambda s: _compare_one(message, s), specs))
+    return {"ok": True, "message": message, "results": results}
+
+
+def compare_stream(message: str, specs: list, emit, judge: bool = False,
+                   coding: bool = False, judge_spec: str = "", apple: bool = False) -> None:
+    """Race the models and stream each one's harness LIVE — gate decision and
+    tool calls, per model — so every column plays out like the chat dock instead
+    of a static 'racing…'. Each contestant runs the REAL loop (tools included) in
+    its own isolated temp home, so it can create events / save notes / search
+    without touching your real data. Parallel threads share one SSE socket, so
+    emit() is serialized behind a lock; each event is tagged with its `spec` so
+    the browser routes it to the right column."""
+    import tempfile
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from waku.app import Waku
+    from waku.config import Settings
+
+    if not message or not specs:
+        emit("done", {"error": "message and models required"})
+        return
+
+    lock = threading.Lock()
+    collected: list = []   # per-model results, saved to the compare history at the end
+    # If this prompt is a known battery case, every column gets a deterministic
+    # Completion score (did the right tool fire, with the right args, enough
+    # times). Free-form prompts still race — they just don't get a score.
+    case = scoring.case_for_message(message)
+
+    def send(kind, ev):
+        with lock:
+            emit(kind, ev)
+            if kind == "result":
+                collected.append(ev)
+
+    def run(spec):
+        provider, _, model = spec.partition(":")
+        send("start", {"spec": spec, "provider": provider, "model": model})
+        home = Path(tempfile.mkdtemp(prefix=f"compare-{provider}-"))
+        gate: dict = {}
+
+        # Stream the STRUCTURAL harness live (gate decision, tool calls) — these
+        # fire from the observer without stream=True. We deliberately DON'T
+        # token-stream the reply: stream=True makes some reasoning models (gemini
+        # with tools) demand a thought_signature and 400, which the plain path
+        # doesn't. So the harness plays out live and the reply lands on finish.
+        def obs(kind, ev):
+            if kind == "gate":
+                gate.update(decision=ev.get("decision"), reason=ev.get("reason"))
+                send("gate", {"spec": spec, "decision": ev.get("decision"), "reason": ev.get("reason")})
+            elif kind == "tool":
+                send("tool", {"spec": spec, "tool": ev.get("tool")})
+
+        try:
+            # coding mode registers delegate_task (the pi sub-agent) so the loop
+            # can hand real programming work to pi — running the FULL harness
+            # (gate, memory, tools), not a bypass. pi runs on this card's model.
+            # apple_calendar defaults OFF (isolation), opt-in per race — when on,
+            # EACH model writes its own event to the real 'Waku' calendar.
+            settings = Settings(provider=provider, model=model, small_model="",
+                                home=home, apple_calendar=apple, experimental=coding)
+            app = Waku(settings=settings)
+            # A scored case may pre-load a fact (e.g. "applies memory") so every
+            # model starts from the same state the checklist assumes.
+            if case and case.get("setup_fact"):
+                app.memory.facts.add(case["setup_fact"]["subject"], case["setup_fact"]["content"])
+            t0 = time.perf_counter()
+            result = app.respond(message, source="compare", observer=obs)
+            ms = int((time.perf_counter() - t0) * 1000)
+            tin = tout = 0
+            ledger = home / "usage.jsonl"
+            if ledger.exists():
+                for line in ledger.read_text().splitlines():
+                    try:
+                        r = json.loads(line)
+                        tin, tout = tin + r.get("in", 0), tout + r.get("out", 0)
+                    except json.JSONDecodeError:
+                        pass
+            pin, pout = price_for(provider, settings.model)
+            cost = round(tin / 1e6 * pin + tout / 1e6 * pout, 4)
+            completion = None
+            if case:
+                passed, why = scoring.check_case(case, result.tool_calls)
+                completion = {"passed": passed, "why": why, "case": case["id"]}
+            # Quality (referee grade) is NOT done here — it runs as one controlled
+            # pass AFTER every column finishes (see below), so the referee doesn't
+            # get a burst of concurrent calls and skip some.
+            send("result", {"spec": spec, "provider": provider, "model": settings.model,
+                            "reply": result.reply, "gate": (gate or None),
+                            "iterations": result.iterations, "latency_ms": ms,
+                            "tools": [{"tool": c["tool"]} for c in result.tool_calls],
+                            "tokens_in": tin, "tokens_out": tout, "cost_usd": cost,
+                            "completion": completion, "quality": None})
+        except (Exception, SystemExit) as exc:
+            # SystemExit (not an Exception subclass) is what get_client raises for
+            # a missing/misconfigured key. Catch it too, or a keyless provider
+            # would vanish from the race silently instead of showing WHY it failed.
+            send("result", {"spec": spec, "provider": provider, "model": model, "error": str(exc)[:200]})
+
+    with ThreadPoolExecutor(max_workers=min(len(specs), 6)) as ex:
+        list(ex.map(run, specs))
+
+    # Grade AFTER the race, as one gentle pass — so the referee gets a steady
+    # trickle of calls (max_workers=2) instead of a burst the moment every column
+    # finishes, which used to 429 and leave some models ungraded. Each grade
+    # updates its card ("grade" event) and the stored result, so history + the
+    # scoreboard end up with every model scored.
+    if judge:
+        jp, _, jm = (judge_spec or "").partition(":")
+        gradable = [r for r in collected if not r.get("error") and (r.get("reply") or "").strip()]
+        emit("grading", {"n": len(gradable), "judge": jm or judge_mod.JUDGE_MODEL})
+
+        def grade(r):
+            if r.get("error") or not (r.get("reply") or "").strip():
+                return
+            q = judge_mod.judge_reply(message, r["reply"], jp or None, jm or None,
+                                      tools=[t.get("tool") for t in (r.get("tools") or [])])
+            r["quality"] = q                       # fold into what gets persisted
+            send("grade", {"spec": r.get("spec"), "quality": q})
+
+        with ThreadPoolExecutor(max_workers=2) as jex:
+            list(jex.map(grade, list(collected)))
+
+    # Persist the race to the arena's own history (never the agent's real state).
+    try:
+        compare_history.append_run(load_settings().home, message, collected)
+    except Exception:
+        pass   # a history-write hiccup must never fail the race
+    emit("done", {})
+
+
+def compare_clear(payload: dict) -> dict:
+    """Wipe the Compare scoreboard/history (the Clear button). Only the arena's
+    own log; nothing else is touched."""
+    compare_history.clear(load_settings().home)
+    return {"ok": True, "runs": [], "aggregate": []}
+
+
+def _compare_history_response(runs: list[dict]) -> dict:
+    """Reprice each stored result from its tokens with the CURRENT price table (so
+    a pricing fix corrects past races), aggregate, and tag each row with the rate.
+    The shared shape returned by /api/compare/history and the re-grade endpoint."""
+    for run in runs:
+        for r in run.get("results", []):
+            if r.get("error"):
+                continue
+            pin, pout = price_for(r.get("provider", ""), r.get("model", ""))
+            r["cost_usd"] = round((r.get("tokens_in") or 0) / 1e6 * pin
+                                  + (r.get("tokens_out") or 0) / 1e6 * pout, 4)
+    agg = compare_history.aggregate(runs)
+    for row in agg:
+        row["rate_in"], row["rate_out"] = price_for(row["provider"], row["model"])
+    return {"runs": runs[-20:][::-1], "aggregate": agg}
+
+
+def compare_regrade(payload: dict) -> dict:
+    """Re-run the referee on the most recent race — for models the grader skipped
+    (429'd) the first time. `only_missing` (default true) grades only the ungraded
+    ones; pass false to re-grade everyone. Returns the refreshed history +
+    scoreboard, same shape as /api/compare/history."""
+    home = load_settings().home
+    runs = compare_history.load_runs(home)
+    if not runs:
+        return {"runs": [], "aggregate": []}
+    jp, _, jm = (payload.get("judge_model") or "").partition(":")
+    only_missing = payload.get("only_missing", True)
+    spec = payload.get("spec")   # grade just ONE card (the per-card button)
+    last = runs[-1]
+    for r in last.get("results", []):
+        if r.get("error") or not (r.get("reply") or "").strip():
+            continue
+        if spec is not None and r.get("spec") != spec:
+            continue
+        if spec is None and only_missing and r.get("quality") is not None:
+            continue
+        q = judge_mod.judge_reply(last.get("message", ""), r["reply"], jp or None, jm or None,
+                                  tools=r.get("tools"))   # history stores tools as [names]
+        if q is not None:
+            r["quality"] = q
+    compare_history.save_runs(home, runs)
+    return _compare_history_response(runs)
+
+
+def compare_delete_run(payload: dict) -> dict:
+    """Delete ONE race (by timestamp) from the scoreboard — its models drop out of
+    the totals — leaving every other race intact. Returns the refreshed history."""
+    home = load_settings().home
+    ts = payload.get("ts")
+    runs = [r for r in compare_history.load_runs(home) if r.get("ts") != ts]
+    compare_history.save_runs(home, runs)
+    return _compare_history_response(runs)
+
 
 # Rough $/million tokens (in, out) for a dollar ESTIMATE — the number humans
 # actually feel. Keyed by provider; deliberately approximate and labelled "est".
 PRICING = {
     "anthropic": (3.0, 15.0), "openai": (2.5, 15.0), "gemini": (0.3, 2.5),
     "deepseek": (0.435, 0.87), "minimax": (0.30, 1.20), "kimi": (0.6, 2.5), "glm": (0.6, 2.2),
+    "xai": (3.0, 15.0),   # Grok — rough est; keyed users get exact from the catalog
     # openrouter fallback for paid models when the live catalog is unreachable
     # (rough mid-catalog guess). ":free" ids and catalog-priced models never
     # hit this: see price_for().
@@ -131,15 +455,32 @@ PRICING = {
 _price_cache: dict[str, tuple[float, float]] = {}
 
 
-# Known per-model prices for endpoints with no listable catalog (the anthropic
-# wire has no /models). Checked before the provider-level fallback so e.g. a
-# kimi-k3 run ($3/$15) isn't priced at the kimi-k2.7 rate ($0.6/$2.5).
+# Known per-model prices ($/M in, out) for endpoints with no listable catalog
+# (the anthropic wire has no /models), checked before the provider-level
+# fallback. Within a provider, models diverge a LOT — fable-5 is ~2x opus,
+# gemini-flash undercuts gemini-pro — so pricing per *model* is the only honest
+# way; a provider-level guess made fable-5 look cheaper than opus. Rates are
+# standard short-context list prices (cache/batch discounts not modelled),
+# fact-checked Jul 2026 against each vendor's pricing page. See docs/benchmarks.md.
 MODEL_PRICING = {
-    "kimi-k3": (3.0, 15.0),          # per Moonshot tech blog, Jul 2026
-    "kimi-k2.7": (0.6, 2.5),
+    # Anthropic — platform.claude.com/docs/.../pricing
     "claude-opus-4-8": (5.0, 25.0),
+    "claude-fable-5": (10.0, 50.0),            # Mythos-class flagship, ~2x opus
     "claude-sonnet-5": (3.0, 15.0),
     "claude-haiku-4-5-20251001": (1.0, 5.0),
+    # OpenAI — openai.com pricing (Sol = flagship; chat-latest = non-reasoning)
+    "gpt-5.6-sol": (5.0, 30.0),
+    "gpt-5.3-chat-latest": (1.75, 14.0),
+    # Google Gemini — ai.google.dev pricing (standard <200k tier)
+    "gemini-3.1-pro-preview": (2.0, 12.0),
+    "gemini-3.5-flash": (1.5, 9.0),
+    # Moonshot Kimi — platform.kimi.ai (highspeed = 2x the standard k2.7 rate)
+    "kimi-k3": (3.0, 15.0),
+    "kimi-k2.7-code-highspeed": (1.9, 8.0),
+    "kimi-k2.7": (0.95, 4.0),
+    # xAI Grok — docs.x.ai/developers/pricing
+    "grok-4.5": (2.0, 6.0),
+    "grok-4.3": (1.25, 2.5),
 }
 
 
@@ -367,7 +708,7 @@ def collect() -> dict:
         "chat_pending": conn.execute("SELECT COUNT(*) FROM chat_log WHERE consolidated=0").fetchone()[0],
         "chat_log": rows("SELECT role, content, consolidated, source, session_id, created_at FROM chat_log ORDER BY id DESC LIMIT 80")[::-1],
         "sessions": session_list(conn),
-        "current_session": (_agent.session.session_id if _agent is not None else "default"),
+        "current_session": (_agent.session.session_id if _agent is not None else _dash_session()),
         "consolidate_every": settings.consolidate_every,
         "calendar": rows('SELECT title, start, "end", attendees, created_at FROM calendar_events ORDER BY start'),
         "outbox": outbox,
@@ -560,6 +901,25 @@ def transcribe_audio(raw: bytes) -> dict:
             pass
 
 
+def _thread_history(conn, sid: str) -> list[dict]:
+    """The ONE way to load a thread for the chat dock: role + content + the
+    per-turn meta (gate/stats/tools/model) so every card renders in full.
+    id '__all__' returns the whole cross-thread timeline (like the Loop tab,
+    but as chat). Every history-loading path goes through here so they can't
+    drift apart (they used to: 'switch' dropped meta and showed only text)."""
+    if sid == "__all__":
+        rows = conn.execute(
+            "SELECT role, content, meta FROM chat_log ORDER BY id DESC LIMIT 200"
+        ).fetchall()[::-1]
+    else:
+        rows = conn.execute(
+            "SELECT role, content, meta FROM chat_log WHERE session_id=? ORDER BY id",
+            (sid,),
+        ).fetchall()
+    return [{"role": r["role"], "content": r["content"],
+             "meta": json.loads(r["meta"]) if r["meta"] else None} for r in rows]
+
+
 def session_action(payload: dict) -> dict:
     """Chat history control: start a new conversation, switch to a past one, or
     read a conversation's history (read-only, for the live inbox). Sessions live
@@ -571,12 +931,8 @@ def session_action(payload: dict) -> dict:
         settings = load_settings()
         settings.ensure_home()
         conn = connect(settings.home)
-        rows = conn.execute(
-            "SELECT role, content FROM chat_log WHERE session_id=? ORDER BY id",
-            (payload.get("id") or "default",),
-        ).fetchall()
-        return {"ok": True, "session_id": payload.get("id") or "default",
-                "history": [{"role": r["role"], "content": r["content"]} for r in rows]}
+        sid = payload.get("id") or "default"
+        return {"ok": True, "session_id": sid, "history": _thread_history(conn, sid)}
     with _agent_lock:
         agent = _get_agent()
         if action == "new":
@@ -586,10 +942,10 @@ def session_action(payload: dict) -> dict:
         if action == "switch":
             sid = payload.get("id") or "default"
             agent.session.switch(sid)
-            hist = [{"role": r, "content": c}
-                    for u, a in agent.memory.session_history(sid)
-                    for r, c in (("user", u), ("assistant", a))]
-            return {"ok": True, "session_id": sid, "history": hist}
+            # Same meta-rich rows as the read-only "history" action, so a
+            # switched thread renders its full turn cards (gate/stats/tools/
+            # model) — not just the text. (These two paths used to disagree.)
+            return {"ok": True, "session_id": sid, "history": _thread_history(agent.conn, sid)}
     return {"error": f"unknown action {action}"}
 
 
@@ -688,13 +1044,27 @@ def memory_action(payload: dict) -> dict:
 _models_cache: dict[str, tuple[float, list]] = {}
 
 
-def list_models() -> dict:
-    """Model ids available on the ACTIVE provider, for the settings model
-    picker — the defaults are starting points, never the menu. Three sources:
-    an explicit Provider.catalog_url (anthropic, kimi), GET {base_url}/models
-    on OpenAI-compatible endpoints (OpenRouter, Gemini, any WAKU_BASE_URL), or
-    the two known defaults when no catalog exists. OpenRouter entries carry
-    free / tool-support / context metadata so the picker can surface the $0
+def _known_default_ids(prov, out: dict, is_active: bool) -> list[dict]:
+    """Best-effort model list when the live catalog is unreachable: the provider's
+    flagship + fast + loop/gate defaults — so the showcase model (e.g. opus-4.8)
+    is offered too, not just the two loop defaults — plus the active model when
+    this is the active provider."""
+    ids = [*(prov.default_pair() if prov else []),
+           prov.model if prov else "", prov.small_model if prov else ""]
+    if is_active:
+        ids = [out.get("model"), out.get("small_model"), *ids]
+    return [{"id": m} for m in dict.fromkeys(m for m in ids if m)]
+
+
+def list_models(provider: str | None = None) -> dict:
+    """Model ids available on a provider, for the settings model picker — the
+    defaults are starting points, never the menu. Pass `provider` to list ANY
+    provider's catalog (the "Your models" add-row picks a provider first);
+    without it, the ACTIVE provider is used. Three sources: an explicit
+    Provider.catalog_url (anthropic, kimi), GET {base_url}/models on
+    OpenAI-compatible endpoints (OpenRouter, Gemini, any WAKU_BASE_URL), or the
+    two known defaults when no catalog exists. OpenRouter entries carry free /
+    tool-support / context metadata so the picker can surface the $0
     tool-capable models. Cached 5 minutes."""
     import time
     import urllib.request
@@ -702,12 +1072,16 @@ def list_models() -> dict:
     from waku.loop.models import PROVIDERS
 
     s = load_settings()
-    prov = PROVIDERS.get(s.provider)
-    base = s.base_url or (prov.base_url if prov else None)
+    # An explicit provider overrides the active one (and its custom base_url:
+    # WAKU_BASE_URL only applies to the provider it was set for).
+    name = provider or s.provider
+    prov = PROVIDERS.get(name)
+    base = (s.base_url if name == s.provider else None) or (prov.base_url if prov else None)
     out = {
+        "provider": name,
         "model": s.model or (prov.model if prov else ""),
         "small_model": s.small_model or (prov.small_model if prov else ""),
-        "endpoint": base or s.provider,
+        "endpoint": base or name,
     }
     # Where can this provider's models be listed? An explicit catalog_url wins
     # (kimi chats on the anthropic wire but lists on its OpenAI-compatible API;
@@ -718,14 +1092,31 @@ def list_models() -> dict:
     elif prov is not None and prov.kind == "openai" and base:
         url = base.rstrip("/") + "/models"
     else:
-        known = dict.fromkeys([out["model"], out["small_model"]]
-                              + ([prov.model, prov.small_model] if prov else []))
-        return {**out, "listed": False, "models": [{"id": m} for m in known if m]}
+        # No catalog endpoint: fall back to the provider's own known defaults
+        # (flagship + fast + loop/gate), not just the active model.
+        return {**out, "listed": False,
+                "models": _known_default_ids(prov, out, name == s.provider)}
 
     cached = _models_cache.get(url)
     if cached and time.time() - cached[0] < 300:
-        return {**out, "listed": True, "models": cached[1]}
-    key = s.api_key or os.getenv(prov.key_env, "")
+        _ts, cmodels, cerr = cached          # cerr None on a real listing
+        r = {**out, "listed": cerr is None, "models": cmodels}
+        if cerr:
+            r["error"] = cerr
+        return r
+    # Use this provider's own key; s.api_key only holds the ACTIVE provider's.
+    key = ((s.api_key if name == s.provider else "") or os.getenv(prov.key_env, "")).strip()
+    # HTTP headers must be latin-1; a key with a stray non-ASCII char (a smart
+    # arrow/quote or a line-break from a bad paste) would otherwise crash the
+    # whole listing with an opaque codec error and silently drop back to two
+    # defaults. Catch it here with a message that actually says how to fix it.
+    try:
+        key.encode("latin-1")
+    except UnicodeEncodeError:
+        msg = (f"{prov.key_env} contains a non-ASCII character — re-paste the key "
+               f"(no spaces, line breaks, or arrows).")
+        return {**out, "listed": False,
+                "models": _known_default_ids(prov, out, name == s.provider), "error": msg}
     # send both auth styles — Bearer for OpenAI-compatible catalogs, x-api-key +
     # version for Anthropic's; each server reads the header it knows
     req = urllib.request.Request(url, headers={
@@ -736,10 +1127,20 @@ def list_models() -> dict:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
     except Exception as exc:
-        # cache the failure for ~1 minute so an unreachable catalog doesn't
-        # stall every 5-second dashboard poll for 10s
-        _models_cache[url] = (time.time() - 240, [])
-        return {**out, "listed": False, "models": [], "error": str(exc)}
+        # Surface the server's actual reason (e.g. xAI's 403 "no credits"), not
+        # just "HTTP Error 403" — an HTTPError carries the body on .read().
+        msg = str(exc)
+        try:
+            msg = f"{msg} — {exc.read().decode()[:160]}"
+        except Exception:
+            pass
+        # still offer the provider's known defaults so the picker isn't empty
+        known = _known_default_ids(prov, out, name == s.provider)
+        # cache the failure (defaults + reason) for ~1 minute so an unreachable
+        # catalog doesn't stall every 5-second dashboard poll for 10s — and so a
+        # cache hit still shows the defaults and the reason, not a blank list.
+        _models_cache[url] = (time.time() - 240, known, msg)
+        return {**out, "listed": False, "models": known, "error": msg}
     models = []
     for m in data.get("data", []):
         mid = m.get("id", "")
@@ -766,21 +1167,102 @@ def list_models() -> dict:
             pass
         models.append(entry)
     models.sort(key=lambda x: (not x["free"], x["tools"] is False, x["id"]))
-    _models_cache[url] = (time.time(), models)
+    _models_cache[url] = (time.time(), models, None)   # None error = a real listing
     return {**out, "listed": True, "models": models}
+
+
+def _models_json() -> Path:
+    return load_settings().home / "models.json"
+
+
+def default_pinned_specs() -> list[str]:
+    """Starter shortlist before the user has curated their own: flagship + fast
+    for every provider that has a key set (so the switcher only shows models you
+    can actually use). Flagship comes first, so it's that provider's default."""
+    from waku.loop.models import PROVIDERS
+
+    specs = []
+    for name, prov in PROVIDERS.items():
+        if os.getenv(prov.key_env):
+            specs += [f"{name}:{m}" for m in prov.default_pair()]
+    return specs
+
+
+def pinned_specs() -> list[str]:
+    """The user's curated 'provider:model' shortlist (ordered), from
+    .waku/models.json. The chat switcher shows exactly these. Before they've
+    saved anything, fall back to the flagship+fast defaults."""
+    p = _models_json()
+    if p.exists():
+        try:
+            return json.loads(p.read_text()).get("pinned", [])
+        except (json.JSONDecodeError, OSError):
+            pass
+    return default_pinned_specs()
+
+
+def default_model_for(provider: str) -> str:
+    """A provider's default model = the FIRST one the user pinned for it.
+    Empty string means 'use the provider's built-in default'."""
+    for spec in pinned_specs():
+        p, _, m = spec.partition(":")
+        if p == provider and m:
+            return m
+    return ""
+
+
+def pin_action(payload: dict) -> dict:
+    """Manage the curated model shortlist: pin / unpin / make-default."""
+    action = payload.get("action")
+    provider, model = payload.get("provider", ""), payload.get("model", "")
+    if not provider or not model:
+        return {"error": "provider and model required"}
+    spec = f"{provider}:{model}"
+    specs = [s for s in pinned_specs() if s != spec]
+    if action == "pin":
+        specs.append(spec)
+    elif action == "default":
+        # move to the front of its provider's group -> becomes that provider's default
+        idx = next((i for i, s in enumerate(specs) if s.split(":", 1)[0] == provider), len(specs))
+        specs.insert(idx, spec)
+    elif action != "unpin":
+        return {"error": f"unknown action {action}"}
+    path = _models_json()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"pinned": specs}, indent=1))
+    return {"ok": True, **settings_info()}
 
 
 def settings_info() -> dict:
     """Current provider/model + which keys are set — masked to last-4, never
-    the full key."""
+    the full key. `pinned` is the user's curated model shortlist (the chat
+    switcher shows exactly these, across providers)."""
     from waku.loop.models import PROVIDERS
 
     s = load_settings()
     prov = PROVIDERS.get(s.provider)
+    # the curated shortlist, in order; the first pinned model per provider is
+    # that provider's default (used when you switch providers).
+    pinned, seen = [], set()
+    for spec in pinned_specs():
+        p, _, m = spec.partition(":")
+        if m:
+            pinned.append({"provider": p, "model": m, "default": p not in seen})
+            seen.add(p)
+    # Group by provider for display (so all of one lab's models sit together,
+    # e.g. a late-added claude-fable-5 joins the other anthropic rows). A STABLE
+    # sort by provider's first-appearance order keeps each provider's own order —
+    # so its default (first pinned) stays on top and the 'default' flags above
+    # still line up.
+    prov_order: dict = {}
+    for row in pinned:
+        prov_order.setdefault(row["provider"], len(prov_order))
+    pinned.sort(key=lambda row: prov_order[row["provider"]])
     return {
         "provider": s.provider,
         "model": s.model or (prov.model if prov else ""),
         "small_model": s.small_model or (prov.small_model if prov else ""),
+        "pinned": pinned,
         # a custom endpoint (e.g. OpenRouter) set via WAKU_BASE_URL / WAKU_API_KEY
         "base_url": s.base_url or "",
         "custom_key_set": bool(s.api_key),
@@ -809,6 +1291,9 @@ def apply_settings(payload: dict) -> dict:
     provider = payload.get("provider")
     if provider not in PROVIDERS:
         return {"error": f"unknown provider {provider}"}
+    before = {"provider": os.getenv("WAKU_PROVIDER", ""),
+              "model": os.getenv("WAKU_MODEL", ""),
+              "small_model": os.getenv("WAKU_SMALL_MODEL", "")}
     writable = ({"WAKU_PROVIDER", "WAKU_MODEL", "WAKU_SMALL_MODEL", "TAVILY_API_KEY"}
                 | {p.key_env for p in PROVIDERS.values()})
     env_path = find_dotenv(usecwd=True) or ".env"
@@ -816,6 +1301,17 @@ def apply_settings(payload: dict) -> dict:
     updates = {"WAKU_PROVIDER": provider,
                "WAKU_MODEL": payload.get("model", "") or "",
                "WAKU_SMALL_MODEL": payload.get("small_model", "") or ""}
+    # Changing provider never carries a model across endpoints (live bug:
+    # kimi->gemini kept gate model kimi-k3 and every turn 404'd on Gemini). But
+    # if the user didn't newly type a model, use THIS provider's default (their
+    # first pinned model for it, else its built-in default) — "a default model
+    # per API key". An explicit model in the payload (e.g. from the chat pill)
+    # always wins.
+    if provider != before["provider"]:
+        if updates["WAKU_MODEL"] in ("", before["model"]):
+            updates["WAKU_MODEL"] = default_model_for(provider)
+        if updates["WAKU_SMALL_MODEL"] in ("", before["small_model"]):
+            updates["WAKU_SMALL_MODEL"] = ""
     for k, v in (payload.get("keys") or {}).items():
         if k in writable and v:  # only non-empty keys overwrite
             updates[k] = v
@@ -838,6 +1334,13 @@ def apply_settings(payload: dict) -> dict:
             return {"error": str(exc)}
     if old is not None:
         old.close()
+    # a model/provider switch is a RELEASE event (the whiteboard's "new model
+    # config" box) — record it in the trace so brain swaps are auditable
+    _agent.tracer.event("config", {
+        "from": before,
+        "to": {"provider": provider, "model": updates["WAKU_MODEL"],
+               "small_model": updates["WAKU_SMALL_MODEL"]},
+    })
     return {"ok": True, **settings_info()}
 
 
@@ -864,18 +1367,28 @@ def events_since(cursor):
 
 
 class Handler(BaseHTTPRequestHandler):
-    def _send(self, body: bytes, ctype: str) -> None:
+    def _send(self, body: bytes, ctype: str, *, no_cache: bool = False) -> None:
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # The frontend files (app.js/style.css) change as we develop; without
+        # this the browser serves a stale cached copy and edits look "missing".
+        if no_cache:
+            self.send_header("Cache-Control", "no-cache, must-revalidate")
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):  # noqa: N802 — http.server API
         if self.path == "/api/data":
             self._send(json.dumps(collect(), default=str).encode(), "application/json")
-        elif self.path == "/api/models":
-            self._send(json.dumps(list_models()).encode(), "application/json")
+        elif self.path == "/api/compare/history":
+            runs = compare_history.load_runs(load_settings().home)
+            self._send(json.dumps(_compare_history_response(runs)).encode(), "application/json")
+        elif self.path.startswith("/api/models"):
+            from urllib.parse import parse_qs, urlparse
+
+            prov = parse_qs(urlparse(self.path).query).get("provider", [None])[0]
+            self._send(json.dumps(list_models(prov)).encode(), "application/json")
         elif self.path.startswith("/api/events"):
             from urllib.parse import parse_qs, urlparse
 
@@ -901,7 +1414,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         ctype = {".css": "text/css", ".js": "text/javascript",
                  ".html": "text/html; charset=utf-8"}.get(target.suffix, "application/octet-stream")
-        self._send(target.read_bytes(), ctype)
+        self._send(target.read_bytes(), ctype, no_cache=True)
 
     def do_POST(self):  # noqa: N802 — local write endpoints
         length = int(self.headers.get("Content-Length", 0))
@@ -934,8 +1447,31 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:  # surface as a terminal event, don't 500
                 emit("done", {"error": f"{type(exc).__name__}: {exc}"})
             return
+        # /api/compare/stream races several models, emitting each result as it lands.
+        if self.path == "/api/compare/stream":
+            payload = json.loads(self.rfile.read(length) or "{}")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+
+            def emit(kind, ev):
+                try:
+                    self.wfile.write(f"data: {json.dumps({'kind': kind, **ev}, default=str)}\n\n".encode())
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            try:
+                compare_stream((payload.get("message") or "").strip(), payload.get("models") or [],
+                               emit, judge=bool(payload.get("judge")), coding=bool(payload.get("coding")),
+                               judge_spec=(payload.get("judge_model") or ""), apple=bool(payload.get("apple")))
+            except Exception as exc:
+                emit("done", {"error": f"{type(exc).__name__}: {exc}"})
+            return
         routes = {"/api/chat": None, "/api/memory": memory_action, "/api/settings": apply_settings,
-                  "/api/query": run_query, "/api/session": session_action}
+                  "/api/query": run_query, "/api/session": session_action, "/api/pin": pin_action,
+                  "/api/compare": compare_models, "/api/compare/clear": compare_clear,
+                  "/api/compare/regrade": compare_regrade, "/api/compare/delete_run": compare_delete_run}
         if self.path not in routes:
             self.send_response(404)
             self.end_headers()

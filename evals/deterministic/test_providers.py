@@ -74,6 +74,27 @@ def test_model_listing_falls_back_without_a_catalog(name, monkeypatch):
     assert result["listed"] is False
     ids = [m["id"] for m in result["models"]]
     assert PROVIDERS[name].model in ids
+    # the flagship (showcase) model is offered too, not just the loop default
+    if PROVIDERS[name].flagship:
+        assert PROVIDERS[name].flagship in ids
+
+
+def test_bad_key_gives_a_fixable_error_not_a_codec_crash(monkeypatch):
+    """A key with a stray non-latin-1 char (a mis-pasted arrow/smart-quote) must
+    NOT crash the whole catalog with an opaque codec error — it should return a
+    fixable message AND still offer the flagship so opus-4.8/fable-5 aren't lost.
+    (Regression: a cloned repo whose ANTHROPIC_API_KEY had a '→' dropped the
+    picker to two defaults with a 'latin-1 codec' error.)"""
+    from waku.ops import dashboard
+
+    monkeypatch.setenv("WAKU_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-" + "x" * 100 + "→bad")
+    monkeypatch.delenv("WAKU_MODEL", raising=False)
+    dashboard._models_cache.clear()
+    result = dashboard.list_models("anthropic")
+    assert result["listed"] is False
+    assert "ANTHROPIC_API_KEY" in result["error"] and "non-ASCII" in result["error"]
+    assert "claude-opus-4-8" in [m["id"] for m in result["models"]]
 
 
 def test_catalog_url_is_used_with_both_auth_styles(monkeypatch):
@@ -120,6 +141,15 @@ def test_price_for_layers_model_over_provider():
     from waku.ops.dashboard import MODEL_PRICING, PRICING, price_for
 
     assert price_for("kimi", "kimi-k3") == MODEL_PRICING["kimi-k3"] == (3.0, 15.0)
-    assert price_for("kimi", "kimi-k2.7") == (0.6, 2.5)
+    assert price_for("kimi", "kimi-k2.7") == (0.95, 4.0)
     assert price_for("kimi", "some-future-model") == PRICING["kimi"]
     assert price_for("openrouter", "whatever:free") == (0.0, 0.0)
+
+    # Regression: within a provider, models diverge hugely — fable-5 is priced at
+    # $10/$50, ~2x opus's $5/$25. A provider-level fallback once made fable-5 look
+    # CHEAPER than opus on the scoreboard; each must carry its own per-model rate.
+    assert price_for("anthropic", "claude-fable-5") == (10.0, 50.0)
+    assert price_for("anthropic", "claude-opus-4-8") == (5.0, 25.0)
+    fable_in, fable_out = price_for("anthropic", "claude-fable-5")
+    opus_in, opus_out = price_for("anthropic", "claude-opus-4-8")
+    assert fable_in > opus_in and fable_out > opus_out   # fable is never cheaper

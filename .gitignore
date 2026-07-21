@@ -13,3 +13,6 @@ dist/
 .waku.bak-*/
 .waku.prerename-bak/
 .env.prerename-bak
+
+# Delegated coding deliverables (dated run folders + auto-run logs)
+waku_workspace/

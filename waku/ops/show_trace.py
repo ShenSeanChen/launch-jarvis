@@ -77,14 +77,19 @@ def render_trace(path: Path, console: Console | None = None) -> int:
                 continue
 
             kind = event.get("type", "event")
-            if kind == "turn_end":
-                turn_depth = max(0, turn_depth - 1)
+            # Turns never nest, so depth is binary: the turn_start/turn_end pair
+            # always sits flush left and the events between them are indented one
+            # level. Assigning the depth rather than adding to it keeps a turn that
+            # crashed before writing its turn_end from pushing the rest of the day
+            # steadily to the right.
+            if kind in {"turn_start", "turn_end"}:
+                turn_depth = 0
             timestamp = str(event.get("ts", ""))
             stamp = timestamp[11:19] if len(timestamp) >= 19 else timestamp
             indent = "  " * turn_depth
             console.print(f"{indent}[dim]{stamp}[/dim] {_event_summary(event)}")
             if kind == "turn_start":
-                turn_depth += 1
+                turn_depth = 1
             events += 1
 
     if not events:

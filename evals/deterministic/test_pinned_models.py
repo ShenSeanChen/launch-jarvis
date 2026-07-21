@@ -19,7 +19,8 @@ from waku.ops import dashboard as d
 
 
 PROVIDER_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY",
-                 "MINIMAX_API_KEY", "MOONSHOT_API_KEY", "ZHIPU_API_KEY", "OPENROUTER_API_KEY")
+                 "MINIMAX_API_KEY", "MOONSHOT_API_KEY", "ZHIPU_API_KEY", "OPENROUTER_API_KEY",
+                 "XAI_API_KEY")
 
 
 @pytest.fixture
@@ -87,6 +88,22 @@ def test_switching_provider_adopts_its_pinned_default(home, monkeypatch):
     assert info["model"] == "kimi-k3"          # adopted the pinned default, not gemini's model
 
 
+def test_pinned_are_grouped_by_provider_for_display(home):
+    """A model added later (e.g. claude-fable-5) should list WITH its provider's
+    other models, not stranded at the bottom — while each provider's default
+    (first pinned) stays on top."""
+    (home / "models.json").write_text(json.dumps({"pinned": [
+        "anthropic:claude-opus-4-8", "openai:gpt-5.3-chat-latest",
+        "anthropic:claude-fable-5", "openai:gpt-4.1-mini"]}))
+    rows = [(r["provider"], r["model"], r["default"]) for r in d.settings_info()["pinned"]]
+    assert rows == [
+        ("anthropic", "claude-opus-4-8", True),      # default stays first
+        ("anthropic", "claude-fable-5", False),      # grouped with anthropic, not stranded
+        ("openai", "gpt-5.3-chat-latest", True),
+        ("openai", "gpt-4.1-mini", False),
+    ]
+
+
 def test_no_pins_is_empty_not_error(home):
     info = d.settings_info()
     assert info["pinned"] == []
@@ -140,7 +157,7 @@ def test_known_catalog_providers_can_list(home):
     they intentionally show their curated defaults until we wire+verify one."""
     from waku.loop.models import PROVIDERS
 
-    CAN_LIST = {"anthropic", "openai", "openrouter", "gemini", "deepseek", "kimi"}
+    CAN_LIST = {"anthropic", "openai", "openrouter", "gemini", "deepseek", "kimi", "xai"}
     for name in CAN_LIST:
         prov = PROVIDERS[name]
         can_list = bool(prov.catalog_url) or (prov.kind == "openai" and bool(prov.base_url))
@@ -155,7 +172,8 @@ def test_list_models_honors_provider_override(home, monkeypatch):
     from waku.loop.models import PROVIDERS
 
     url = PROVIDERS["kimi"].catalog_url
-    monkeypatch.setattr(d, "_models_cache", {url: (time.time(), [{"id": "kimi-k3"}])})
+    # cache tuple is (ts, models, error) — None error means a real listing
+    monkeypatch.setattr(d, "_models_cache", {url: (time.time(), [{"id": "kimi-k3"}], None)})
     out = d.list_models("kimi")
     assert out["provider"] == "kimi"
     assert out["listed"] is True

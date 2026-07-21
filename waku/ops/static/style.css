@@ -300,6 +300,7 @@
   .stage{font-size:11px;padding:2px 9px;border-radius:99px;border:1px solid var(--line2);color:var(--ink3)}
   .stage.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
   .stage.done{border-color:var(--good);color:var(--good)}
+  .stage.subagent{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);font-weight:600}
   table{width:100%;border-collapse:collapse;font-size:13px}
   td,th{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
   tr:last-child td{border-bottom:none}
@@ -307,3 +308,71 @@
   .empty{color:var(--ink3);font-style:normal;font-size:13px}
   code{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid var(--line);
        padding:1px 5px;border-radius:4px}
+  /* Model arena (Compare tab): message + model picks, then a scrolling row of
+     one result column per model. */
+  .cmp-input{width:100%;background:var(--bg);border:1px solid var(--line2);border-radius:8px;
+       padding:10px 12px;color:var(--ink);font-size:13.5px;font-family:inherit;outline:none;resize:vertical}
+  .cmp-input:focus{border-color:var(--accent)}
+  .cmp-picks{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:center}
+  .cmp-pick{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--ink2);
+       border:1px solid var(--line2);border-radius:99px;padding:4px 10px;cursor:pointer}
+  .cmp-pick.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+  .cmp-pick input{margin:0}
+  /* Responsive: as many ~300px columns as fit, then wrap to the next row. */
+  .cmp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
+       gap:12px;margin-top:12px;align-items:start}
+  .cmp-col{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+       padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+  .cmp-col.err{border-color:var(--bad)}
+  .cmp-h{display:flex;align-items:center;gap:6px;font-size:13px}
+  .cmp-stats{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+  .chip{font-size:11px;color:var(--ink2);border:1px solid var(--line2);border-radius:99px;padding:1px 8px}
+  .chip.money{color:var(--good);border-color:var(--good)}
+  .chip.sorted{color:var(--accent);border-color:var(--accent);background:var(--accent-soft);font-weight:600}
+  .cmp-reply{margin-top:2px;font-size:13px;max-height:340px;overflow-y:auto}
+  .cmp-race{padding:5px 14px;font-size:12.5px}
+  .cmp-th{cursor:pointer;white-space:nowrap}
+  .cmp-th:hover{color:var(--ink)}
+  .cmp-th.on{color:var(--accent)}
+  .cmp-score{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;
+    font-weight:600;letter-spacing:.02em;white-space:nowrap;vertical-align:middle}
+  .cmp-score.pass{background:var(--good-soft);color:var(--good)}
+  .cmp-score.fail{background:var(--bad-soft);color:var(--bad)}
+  .cmp-score.part{background:#c8951f22;color:#c8951f}
+  .cmp-col.solved{box-shadow:inset 3px 0 0 var(--good)}
+  .cmp-col.failed{box-shadow:inset 3px 0 0 var(--bad)}
+  .cmp-q{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;
+    font-weight:600;white-space:nowrap;vertical-align:middle}
+  .cmp-q.hi{background:var(--good-soft);color:var(--good)}
+  .cmp-q.mid{background:#c8951f22;color:#c8951f}
+  .cmp-q.lo{background:var(--bad-soft);color:var(--bad)}
+  .cmp-grade1{margin-left:auto;font-size:11px;white-space:nowrap;flex-shrink:0}
+  .cmp-judge{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--ink3);
+    cursor:pointer;white-space:nowrap;padding:4px 8px;border-radius:8px;border:1px solid var(--line)}
+  .cmp-judge.on{color:var(--accent);border-color:var(--accent)}
+  .cmp-judge input{margin:0}
+  .cmp-judge select{font:inherit;font-size:12px;color:var(--ink);background:var(--card);
+    border:1px solid var(--line);border-radius:6px;padding:1px 4px;margin-left:2px;cursor:pointer}
+  .cmp-judge select:disabled{opacity:.5;cursor:default}
+  .scatter{width:100%;height:auto;display:block}
+  .scatter text{font-family:inherit}   /* match the page's sans, not SVG's default serif */
+  .scatter .sc-axis{stroke:var(--line);stroke-width:1}
+  .scatter .sc-grid{stroke:var(--line);stroke-width:1;opacity:.4}
+  .scatter .sc-tick{fill:var(--ink3);font-size:10px}
+  /* the y-axis label carries the grading criteria on hover (native <title>) */
+  .scatter .sc-ylabel{text-decoration:underline dotted;fill:var(--ink2)}
+  /* a wide invisible hit-zone over the y label so the criteria tooltip is easy to hover */
+  .scatter .sc-yhit{fill:transparent;cursor:help;pointer-events:all}
+  .sc-tip{position:fixed;display:none;z-index:9999;pointer-events:none;max-width:340px;
+    white-space:pre-line;background:var(--panel);color:var(--ink);border:1px solid var(--line);
+    border-radius:8px;padding:8px 11px;font-size:12px;line-height:1.45;
+    box-shadow:0 8px 30px rgba(0,0,0,.28)}
+  .scatter .sc-lbl{fill:var(--ink2);font-size:10.5px}
+  .scatter .sc-dot.hi{fill:var(--good)}
+  .scatter .sc-dot.mid{fill:#c8951f}
+  .scatter .sc-dot.lo{fill:var(--bad)}
+  .cmp-sortbar{display:flex;align-items:center;gap:6px;margin:2px 0 12px;font-size:12px;color:var(--ink3)}
+  .cmp-sortbtn{cursor:pointer;font-size:12px;color:var(--ink2);background:var(--bg);
+       border:1px solid var(--line2);border-radius:99px;padding:3px 12px}
+  .cmp-sortbtn:hover{border-color:var(--accent);color:var(--accent)}
+  .cmp-sortbtn.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);font-weight:600}

@@ -29,6 +29,7 @@ from pathlib import Path
 
 from waku.config import load_settings
 from waku.db import connect
+from waku.ops import compare_history, judge as judge_mod, scoring
 
 PORT = 7777
 # The frontend lives in its own files (static/index.html + style.css + app.js),
@@ -184,11 +185,264 @@ def chat_stream(message: str, emit) -> None:
         "model": agent.settings.model,   # which brain answered — shown per card
     })
 
+
+def _compare_one(message: str, spec: str) -> dict:
+    """Run ONE message through ONE model in a throwaway temp home (same isolation
+    as `make shootout`, so it never touches your real memory/calendar), and
+    return its receipts — reply, gate, tools, latency, tokens, cost. A broken
+    contestant returns an {error} dict; it never raises."""
+    import tempfile
+    import time
+
+    from waku.app import Waku
+    from waku.config import Settings
+
+    provider, _, model = spec.partition(":")
+    home = Path(tempfile.mkdtemp(prefix=f"compare-{provider}-"))
+    gate: dict = {}
+    try:
+        settings = Settings(provider=provider, model=model, small_model="",
+                            home=home, apple_calendar=False)
+        app = Waku(settings=settings)
+        t0 = time.perf_counter()
+        result = app.respond(message, source="compare",
+                             observer=lambda k, ev: gate.update(
+                                 decision=ev.get("decision"), reason=ev.get("reason"))
+                             if k == "gate" else None)
+        ms = int((time.perf_counter() - t0) * 1000)
+        tin = tout = 0
+        ledger = home / "usage.jsonl"
+        if ledger.exists():
+            for line in ledger.read_text().splitlines():
+                try:
+                    r = json.loads(line)
+                    tin, tout = tin + r.get("in", 0), tout + r.get("out", 0)
+                except json.JSONDecodeError:
+                    pass
+        pin, pout = price_for(provider, settings.model)
+        return {"spec": spec, "provider": provider, "model": settings.model, "reply": result.reply,
+                "gate": (gate or None), "iterations": result.iterations, "latency_ms": ms,
+                "tools": [{"tool": c["tool"]} for c in result.tool_calls],
+                "tokens_in": tin, "tokens_out": tout,
+                "cost_usd": round(tin / 1e6 * pin + tout / 1e6 * pout, 4)}
+    except (Exception, SystemExit) as exc:   # a broken contestant (incl. a missing
+        # key, which get_client raises as SystemExit) fails alone, not the whole race
+        return {"spec": spec, "provider": provider, "model": model, "error": str(exc)[:200]}
+
+
+def compare_models(payload: dict) -> dict:
+    """Race ONE message through several models AT ONCE (parallel threads) and
+    return every result together. Non-streaming; the dashboard uses the SSE
+    version so columns fill in as each finishes."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    message = (payload.get("message") or "").strip()
+    specs = payload.get("models") or []
+    if not message or not specs:
+        return {"error": "message and models required"}
+    with ThreadPoolExecutor(max_workers=min(len(specs), 6)) as ex:
+        results = list(ex.map(lambda s: _compare_one(message, s), specs))
+    return {"ok": True, "message": message, "results": results}
+
+
+def compare_stream(message: str, specs: list, emit, judge: bool = False,
+                   coding: bool = False, judge_spec: str = "", apple: bool = False) -> None:
+    """Race the models and stream each one's harness LIVE — gate decision and
+    tool calls, per model — so every column plays out like the chat dock instead
+    of a static 'racing…'. Each contestant runs the REAL loop (tools included) in
+    its own isolated temp home, so it can create events / save notes / search
+    without touching your real data. Parallel threads share one SSE socket, so
+    emit() is serialized behind a lock; each event is tagged with its `spec` so
+    the browser routes it to the right column."""
+    import tempfile
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from waku.app import Waku
+    from waku.config import Settings
+
+    if not message or not specs:
+        emit("done", {"error": "message and models required"})
+        return
+
+    lock = threading.Lock()
+    collected: list = []   # per-model results, saved to the compare history at the end
+    # If this prompt is a known battery case, every column gets a deterministic
+    # Completion score (did the right tool fire, with the right args, enough
+    # times). Free-form prompts still race — they just don't get a score.
+    case = scoring.case_for_message(message)
+
+    def send(kind, ev):
+        with lock:
+            emit(kind, ev)
+            if kind == "result":
+                collected.append(ev)
+
+    def run(spec):
+        provider, _, model = spec.partition(":")
+        send("start", {"spec": spec, "provider": provider, "model": model})
+        home = Path(tempfile.mkdtemp(prefix=f"compare-{provider}-"))
+        gate: dict = {}
+
+        # Stream the STRUCTURAL harness live (gate decision, tool calls) — these
+        # fire from the observer without stream=True. We deliberately DON'T
+        # token-stream the reply: stream=True makes some reasoning models (gemini
+        # with tools) demand a thought_signature and 400, which the plain path
+        # doesn't. So the harness plays out live and the reply lands on finish.
+        def obs(kind, ev):
+            if kind == "gate":
+                gate.update(decision=ev.get("decision"), reason=ev.get("reason"))
+                send("gate", {"spec": spec, "decision": ev.get("decision"), "reason": ev.get("reason")})
+            elif kind == "tool":
+                send("tool", {"spec": spec, "tool": ev.get("tool")})
+
+        try:
+            # coding mode registers delegate_task (the pi sub-agent) so the loop
+            # can hand real programming work to pi — running the FULL harness
+            # (gate, memory, tools), not a bypass. pi runs on this card's model.
+            # apple_calendar defaults OFF (isolation), opt-in per race — when on,
+            # EACH model writes its own event to the real 'Waku' calendar.
+            settings = Settings(provider=provider, model=model, small_model="",
+                                home=home, apple_calendar=apple, experimental=coding)
+            app = Waku(settings=settings)
+            # A scored case may pre-load a fact (e.g. "applies memory") so every
+            # model starts from the same state the checklist assumes.
+            if case and case.get("setup_fact"):
+                app.memory.facts.add(case["setup_fact"]["subject"], case["setup_fact"]["content"])
+            t0 = time.perf_counter()
+            result = app.respond(message, source="compare", observer=obs)
+            ms = int((time.perf_counter() - t0) * 1000)
+            tin = tout = 0
+            ledger = home / "usage.jsonl"
+            if ledger.exists():
+                for line in ledger.read_text().splitlines():
+                    try:
+                        r = json.loads(line)
+                        tin, tout = tin + r.get("in", 0), tout + r.get("out", 0)
+                    except json.JSONDecodeError:
+                        pass
+            pin, pout = price_for(provider, settings.model)
+            cost = round(tin / 1e6 * pin + tout / 1e6 * pout, 4)
+            completion = None
+            if case:
+                passed, why = scoring.check_case(case, result.tool_calls)
+                completion = {"passed": passed, "why": why, "case": case["id"]}
+            # Quality (referee grade) is NOT done here — it runs as one controlled
+            # pass AFTER every column finishes (see below), so the referee doesn't
+            # get a burst of concurrent calls and skip some.
+            send("result", {"spec": spec, "provider": provider, "model": settings.model,
+                            "reply": result.reply, "gate": (gate or None),
+                            "iterations": result.iterations, "latency_ms": ms,
+                            "tools": [{"tool": c["tool"]} for c in result.tool_calls],
+                            "tokens_in": tin, "tokens_out": tout, "cost_usd": cost,
+                            "completion": completion, "quality": None})
+        except (Exception, SystemExit) as exc:
+            # SystemExit (not an Exception subclass) is what get_client raises for
+            # a missing/misconfigured key. Catch it too, or a keyless provider
+            # would vanish from the race silently instead of showing WHY it failed.
+            send("result", {"spec": spec, "provider": provider, "model": model, "error": str(exc)[:200]})
+
+    with ThreadPoolExecutor(max_workers=min(len(specs), 6)) as ex:
+        list(ex.map(run, specs))
+
+    # Grade AFTER the race, as one gentle pass — so the referee gets a steady
+    # trickle of calls (max_workers=2) instead of a burst the moment every column
+    # finishes, which used to 429 and leave some models ungraded. Each grade
+    # updates its card ("grade" event) and the stored result, so history + the
+    # scoreboard end up with every model scored.
+    if judge:
+        jp, _, jm = (judge_spec or "").partition(":")
+        gradable = [r for r in collected if not r.get("error") and (r.get("reply") or "").strip()]
+        emit("grading", {"n": len(gradable), "judge": jm or judge_mod.JUDGE_MODEL})
+
+        def grade(r):
+            if r.get("error") or not (r.get("reply") or "").strip():
+                return
+            q = judge_mod.judge_reply(message, r["reply"], jp or None, jm or None,
+                                      tools=[t.get("tool") for t in (r.get("tools") or [])])
+            r["quality"] = q                       # fold into what gets persisted
+            send("grade", {"spec": r.get("spec"), "quality": q})
+
+        with ThreadPoolExecutor(max_workers=2) as jex:
+            list(jex.map(grade, list(collected)))
+
+    # Persist the race to the arena's own history (never the agent's real state).
+    try:
+        compare_history.append_run(load_settings().home, message, collected)
+    except Exception:
+        pass   # a history-write hiccup must never fail the race
+    emit("done", {})
+
+
+def compare_clear(payload: dict) -> dict:
+    """Wipe the Compare scoreboard/history (the Clear button). Only the arena's
+    own log; nothing else is touched."""
+    compare_history.clear(load_settings().home)
+    return {"ok": True, "runs": [], "aggregate": []}
+
+
+def _compare_history_response(runs: list[dict]) -> dict:
+    """Reprice each stored result from its tokens with the CURRENT price table (so
+    a pricing fix corrects past races), aggregate, and tag each row with the rate.
+    The shared shape returned by /api/compare/history and the re-grade endpoint."""
+    for run in runs:
+        for r in run.get("results", []):
+            if r.get("error"):
+                continue
+            pin, pout = price_for(r.get("provider", ""), r.get("model", ""))
+            r["cost_usd"] = round((r.get("tokens_in") or 0) / 1e6 * pin
+                                  + (r.get("tokens_out") or 0) / 1e6 * pout, 4)
+    agg = compare_history.aggregate(runs)
+    for row in agg:
+        row["rate_in"], row["rate_out"] = price_for(row["provider"], row["model"])
+    return {"runs": runs[-20:][::-1], "aggregate": agg}
+
+
+def compare_regrade(payload: dict) -> dict:
+    """Re-run the referee on the most recent race — for models the grader skipped
+    (429'd) the first time. `only_missing` (default true) grades only the ungraded
+    ones; pass false to re-grade everyone. Returns the refreshed history +
+    scoreboard, same shape as /api/compare/history."""
+    home = load_settings().home
+    runs = compare_history.load_runs(home)
+    if not runs:
+        return {"runs": [], "aggregate": []}
+    jp, _, jm = (payload.get("judge_model") or "").partition(":")
+    only_missing = payload.get("only_missing", True)
+    spec = payload.get("spec")   # grade just ONE card (the per-card button)
+    last = runs[-1]
+    for r in last.get("results", []):
+        if r.get("error") or not (r.get("reply") or "").strip():
+            continue
+        if spec is not None and r.get("spec") != spec:
+            continue
+        if spec is None and only_missing and r.get("quality") is not None:
+            continue
+        q = judge_mod.judge_reply(last.get("message", ""), r["reply"], jp or None, jm or None,
+                                  tools=r.get("tools"))   # history stores tools as [names]
+        if q is not None:
+            r["quality"] = q
+    compare_history.save_runs(home, runs)
+    return _compare_history_response(runs)
+
+
+def compare_delete_run(payload: dict) -> dict:
+    """Delete ONE race (by timestamp) from the scoreboard — its models drop out of
+    the totals — leaving every other race intact. Returns the refreshed history."""
+    home = load_settings().home
+    ts = payload.get("ts")
+    runs = [r for r in compare_history.load_runs(home) if r.get("ts") != ts]
+    compare_history.save_runs(home, runs)
+    return _compare_history_response(runs)
+
+
 # Rough $/million tokens (in, out) for a dollar ESTIMATE — the number humans
 # actually feel. Keyed by provider; deliberately approximate and labelled "est".
 PRICING = {
     "anthropic": (3.0, 15.0), "openai": (2.5, 15.0), "gemini": (0.3, 2.5),
     "deepseek": (0.435, 0.87), "minimax": (0.30, 1.20), "kimi": (0.6, 2.5), "glm": (0.6, 2.2),
+    "xai": (3.0, 15.0),   # Grok — rough est; keyed users get exact from the catalog
     # openrouter fallback for paid models when the live catalog is unreachable
     # (rough mid-catalog guess). ":free" ids and catalog-priced models never
     # hit this: see price_for().
@@ -201,15 +455,32 @@ PRICING = {
 _price_cache: dict[str, tuple[float, float]] = {}
 
 
-# Known per-model prices for endpoints with no listable catalog (the anthropic
-# wire has no /models). Checked before the provider-level fallback so e.g. a
-# kimi-k3 run ($3/$15) isn't priced at the kimi-k2.7 rate ($0.6/$2.5).
+# Known per-model prices ($/M in, out) for endpoints with no listable catalog
+# (the anthropic wire has no /models), checked before the provider-level
+# fallback. Within a provider, models diverge a LOT — fable-5 is ~2x opus,
+# gemini-flash undercuts gemini-pro — so pricing per *model* is the only honest
+# way; a provider-level guess made fable-5 look cheaper than opus. Rates are
+# standard short-context list prices (cache/batch discounts not modelled),
+# fact-checked Jul 2026 against each vendor's pricing page. See docs/benchmarks.md.
 MODEL_PRICING = {
-    "kimi-k3": (3.0, 15.0),          # per Moonshot tech blog, Jul 2026
-    "kimi-k2.7": (0.6, 2.5),
+    # Anthropic — platform.claude.com/docs/.../pricing
     "claude-opus-4-8": (5.0, 25.0),
+    "claude-fable-5": (10.0, 50.0),            # Mythos-class flagship, ~2x opus
     "claude-sonnet-5": (3.0, 15.0),
     "claude-haiku-4-5-20251001": (1.0, 5.0),
+    # OpenAI — openai.com pricing (Sol = flagship; chat-latest = non-reasoning)
+    "gpt-5.6-sol": (5.0, 30.0),
+    "gpt-5.3-chat-latest": (1.75, 14.0),
+    # Google Gemini — ai.google.dev pricing (standard <200k tier)
+    "gemini-3.1-pro-preview": (2.0, 12.0),
+    "gemini-3.5-flash": (1.5, 9.0),
+    # Moonshot Kimi — platform.kimi.ai (highspeed = 2x the standard k2.7 rate)
+    "kimi-k3": (3.0, 15.0),
+    "kimi-k2.7-code-highspeed": (1.9, 8.0),
+    "kimi-k2.7": (0.95, 4.0),
+    # xAI Grok — docs.x.ai/developers/pricing
+    "grok-4.5": (2.0, 6.0),
+    "grok-4.3": (1.25, 2.5),
 }
 
 
@@ -773,6 +1044,18 @@ def memory_action(payload: dict) -> dict:
 _models_cache: dict[str, tuple[float, list]] = {}
 
 
+def _known_default_ids(prov, out: dict, is_active: bool) -> list[dict]:
+    """Best-effort model list when the live catalog is unreachable: the provider's
+    flagship + fast + loop/gate defaults — so the showcase model (e.g. opus-4.8)
+    is offered too, not just the two loop defaults — plus the active model when
+    this is the active provider."""
+    ids = [*(prov.default_pair() if prov else []),
+           prov.model if prov else "", prov.small_model if prov else ""]
+    if is_active:
+        ids = [out.get("model"), out.get("small_model"), *ids]
+    return [{"id": m} for m in dict.fromkeys(m for m in ids if m)]
+
+
 def list_models(provider: str | None = None) -> dict:
     """Model ids available on a provider, for the settings model picker — the
     defaults are starting points, never the menu. Pass `provider` to list ANY
@@ -810,17 +1093,30 @@ def list_models(provider: str | None = None) -> dict:
         url = base.rstrip("/") + "/models"
     else:
         # No catalog endpoint: fall back to the provider's own known defaults
-        # (not the active model, which belongs to a different provider).
-        known = dict.fromkeys([prov.model, prov.small_model] if prov else [])
-        if name == s.provider:
-            known = dict.fromkeys([out["model"], out["small_model"], *known])
-        return {**out, "listed": False, "models": [{"id": m} for m in known if m]}
+        # (flagship + fast + loop/gate), not just the active model.
+        return {**out, "listed": False,
+                "models": _known_default_ids(prov, out, name == s.provider)}
 
     cached = _models_cache.get(url)
     if cached and time.time() - cached[0] < 300:
-        return {**out, "listed": True, "models": cached[1]}
+        _ts, cmodels, cerr = cached          # cerr None on a real listing
+        r = {**out, "listed": cerr is None, "models": cmodels}
+        if cerr:
+            r["error"] = cerr
+        return r
     # Use this provider's own key; s.api_key only holds the ACTIVE provider's.
-    key = (s.api_key if name == s.provider else "") or os.getenv(prov.key_env, "")
+    key = ((s.api_key if name == s.provider else "") or os.getenv(prov.key_env, "")).strip()
+    # HTTP headers must be latin-1; a key with a stray non-ASCII char (a smart
+    # arrow/quote or a line-break from a bad paste) would otherwise crash the
+    # whole listing with an opaque codec error and silently drop back to two
+    # defaults. Catch it here with a message that actually says how to fix it.
+    try:
+        key.encode("latin-1")
+    except UnicodeEncodeError:
+        msg = (f"{prov.key_env} contains a non-ASCII character — re-paste the key "
+               f"(no spaces, line breaks, or arrows).")
+        return {**out, "listed": False,
+                "models": _known_default_ids(prov, out, name == s.provider), "error": msg}
     # send both auth styles — Bearer for OpenAI-compatible catalogs, x-api-key +
     # version for Anthropic's; each server reads the header it knows
     req = urllib.request.Request(url, headers={
@@ -831,10 +1127,20 @@ def list_models(provider: str | None = None) -> dict:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
     except Exception as exc:
-        # cache the failure for ~1 minute so an unreachable catalog doesn't
-        # stall every 5-second dashboard poll for 10s
-        _models_cache[url] = (time.time() - 240, [])
-        return {**out, "listed": False, "models": [], "error": str(exc)}
+        # Surface the server's actual reason (e.g. xAI's 403 "no credits"), not
+        # just "HTTP Error 403" — an HTTPError carries the body on .read().
+        msg = str(exc)
+        try:
+            msg = f"{msg} — {exc.read().decode()[:160]}"
+        except Exception:
+            pass
+        # still offer the provider's known defaults so the picker isn't empty
+        known = _known_default_ids(prov, out, name == s.provider)
+        # cache the failure (defaults + reason) for ~1 minute so an unreachable
+        # catalog doesn't stall every 5-second dashboard poll for 10s — and so a
+        # cache hit still shows the defaults and the reason, not a blank list.
+        _models_cache[url] = (time.time() - 240, known, msg)
+        return {**out, "listed": False, "models": known, "error": msg}
     models = []
     for m in data.get("data", []):
         mid = m.get("id", "")
@@ -861,7 +1167,7 @@ def list_models(provider: str | None = None) -> dict:
             pass
         models.append(entry)
     models.sort(key=lambda x: (not x["free"], x["tools"] is False, x["id"]))
-    _models_cache[url] = (time.time(), models)
+    _models_cache[url] = (time.time(), models, None)   # None error = a real listing
     return {**out, "listed": True, "models": models}
 
 
@@ -943,6 +1249,15 @@ def settings_info() -> dict:
         if m:
             pinned.append({"provider": p, "model": m, "default": p not in seen})
             seen.add(p)
+    # Group by provider for display (so all of one lab's models sit together,
+    # e.g. a late-added claude-fable-5 joins the other anthropic rows). A STABLE
+    # sort by provider's first-appearance order keeps each provider's own order —
+    # so its default (first pinned) stays on top and the 'default' flags above
+    # still line up.
+    prov_order: dict = {}
+    for row in pinned:
+        prov_order.setdefault(row["provider"], len(prov_order))
+    pinned.sort(key=lambda row: prov_order[row["provider"]])
     return {
         "provider": s.provider,
         "model": s.model or (prov.model if prov else ""),
@@ -1066,6 +1381,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 — http.server API
         if self.path == "/api/data":
             self._send(json.dumps(collect(), default=str).encode(), "application/json")
+        elif self.path == "/api/compare/history":
+            runs = compare_history.load_runs(load_settings().home)
+            self._send(json.dumps(_compare_history_response(runs)).encode(), "application/json")
         elif self.path.startswith("/api/models"):
             from urllib.parse import parse_qs, urlparse
 
@@ -1129,8 +1447,31 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:  # surface as a terminal event, don't 500
                 emit("done", {"error": f"{type(exc).__name__}: {exc}"})
             return
+        # /api/compare/stream races several models, emitting each result as it lands.
+        if self.path == "/api/compare/stream":
+            payload = json.loads(self.rfile.read(length) or "{}")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+
+            def emit(kind, ev):
+                try:
+                    self.wfile.write(f"data: {json.dumps({'kind': kind, **ev}, default=str)}\n\n".encode())
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            try:
+                compare_stream((payload.get("message") or "").strip(), payload.get("models") or [],
+                               emit, judge=bool(payload.get("judge")), coding=bool(payload.get("coding")),
+                               judge_spec=(payload.get("judge_model") or ""), apple=bool(payload.get("apple")))
+            except Exception as exc:
+                emit("done", {"error": f"{type(exc).__name__}: {exc}"})
+            return
         routes = {"/api/chat": None, "/api/memory": memory_action, "/api/settings": apply_settings,
-                  "/api/query": run_query, "/api/session": session_action, "/api/pin": pin_action}
+                  "/api/query": run_query, "/api/session": session_action, "/api/pin": pin_action,
+                  "/api/compare": compare_models, "/api/compare/clear": compare_clear,
+                  "/api/compare/regrade": compare_regrade, "/api/compare/delete_run": compare_delete_run}
         if self.path not in routes:
             self.send_response(404)
             self.end_headers()

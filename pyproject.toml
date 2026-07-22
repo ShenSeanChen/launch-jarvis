@@ -54,6 +54,11 @@ voice-neural = [
 supabase = [
     "supabase>=2.0",
 ]
+# Optional episodic-memory backend: Notion database
+# Requires >=2.5: the adapter uses the data_sources API (Notion API 2025-09-03).
+notion = [
+    "notion-client>=2.5",
+]
 # Optional: connect MCP servers (.waku/mcp.json)
 mcp = [
     "mcp>=1.0",

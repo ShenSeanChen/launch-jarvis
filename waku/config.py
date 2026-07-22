@@ -53,6 +53,8 @@ class Settings:
     retrieval_top_k: int = field(default_factory=lambda: int(os.getenv("WAKU_RETRIEVAL_TOP_K", "4")))
     # 'sqlite' (default, zero setup) or 'supabase' (pgvector upgrade path — see launch-rag).
     semantic_store: str = field(default_factory=lambda: os.getenv("WAKU_SEMANTIC_STORE", "sqlite"))
+    # 'sqlite' (default, zero setup) or 'notion' (episodes live in a Notion database).
+    episodic_store: str = field(default_factory=lambda: os.getenv("WAKU_EPISODIC_STORE", "sqlite"))
 
     # --- Tools
     # Sync created events into Apple Calendar (a dedicated "Waku" calendar)

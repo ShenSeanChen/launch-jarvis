@@ -567,6 +567,26 @@ def collect() -> dict:
     def rows(sql: str) -> list[dict]:
         return [dict(r) for r in conn.execute(sql).fetchall()]
 
+    def episodes_payload() -> dict:
+        """Episodes from the active backend: sqlite (default) or notion.
+        A Notion outage must not take down the whole dashboard payload."""
+        if settings.episodic_store != "notion":
+            return {
+                "source": "sqlite",
+                "error": "",
+                "items": rows(
+                    "SELECT id, happened_at, summary FROM episodes ORDER BY happened_at DESC"
+                ),
+            }
+        try:
+            from waku.memory.episodic.notion_store import NotionEpisodeStore
+
+            return {"source": "notion", "error": "", "items": NotionEpisodeStore().list()}
+        except Exception as exc:
+            return {"source": "notion", "error": str(exc), "items": []}
+
+    episodes_data = episodes_payload()
+
     # --- traces → turns (group events between turn_start and turn_end)
     events = []
     trace_files = sorted((home / "traces").glob("*.jsonl"))
@@ -703,7 +723,9 @@ def collect() -> dict:
                        for e in events[-18:]][::-1],
         "trace_file": (trace_files[-1].name if trace_files else None),
         "facts": rows("SELECT id, subject, content, source, created_at FROM facts ORDER BY id DESC"),
-        "episodes": rows("SELECT id, happened_at, summary FROM episodes ORDER BY happened_at DESC"),
+        "episodes": episodes_data["items"],
+        "episodes_source": episodes_data["source"],
+        "episodes_error": episodes_data["error"],
         "soul": (home / "SOUL.md").read_text() if (home / "SOUL.md").exists() else "",
         "chat_pending": conn.execute("SELECT COUNT(*) FROM chat_log WHERE consolidated=0").fetchone()[0],
         "chat_log": rows("SELECT role, content, consolidated, source, session_id, created_at FROM chat_log ORDER BY id DESC LIMIT 80")[::-1],
@@ -811,14 +833,21 @@ def tools_info() -> dict:
         from waku.tools import calendar, memory_admin, messages, notes, search
 
         conn = connect(settings.home)
-        mem = Memory(conn, settings, None)
+        try:
+            mem = Memory(conn, settings, None)
+        except Exception:
+            # A misconfigured optional backend (notion/supabase) must not take
+            # the dashboard down — drop the memory-admin tools from the
+            # display-only catalog instead.
+            mem = None
         tools = [calendar.make_tool(conn, settings.home, apple_calendar=settings.apple_calendar),
                  calendar.make_list_tool(conn),
                  notes.make_tool(conn), messages.make_tool(settings.home),
                  search.make_tool(),
-                 memory_admin.make_manage_memory_tool(mem),
-                 memory_admin.make_update_soul_tool(settings),
-                 memory_admin.make_create_skill_tool(settings, mem)]
+                 memory_admin.make_update_soul_tool(settings)]
+        if mem is not None:
+            tools += [memory_admin.make_manage_memory_tool(mem),
+                      memory_admin.make_create_skill_tool(settings, mem)]
         if settings.apple_tools:
             from waku.tools import apple
 
@@ -1028,6 +1057,10 @@ def memory_action(payload: dict) -> dict:
 
     conn = connect(settings.home)
     facts, episodes = SqliteFactStore(conn), SqliteEpisodeStore(conn)
+    if action == "delete_episode" and settings.episodic_store == "notion":
+        from waku.memory.episodic.notion_store import NotionEpisodeStore
+
+        return {"ok": NotionEpisodeStore().delete(str(payload.get("id", "")))}
     try:
         rid = int(payload.get("id", 0))
     except (TypeError, ValueError):
@@ -1277,6 +1310,12 @@ def settings_info() -> dict:
         "search_key_env": "TAVILY_API_KEY",
         "search_key_set": bool(os.getenv("TAVILY_API_KEY")),
         "search_key_last4": (os.getenv("TAVILY_API_KEY") or "")[-4:],
+        # episodic-memory backend: sqlite (default) or notion
+        "episodic_store": s.episodic_store,
+        "notion_token_set": bool(os.getenv("NOTION_TOKEN")),
+        "notion_token_last4": (os.getenv("NOTION_TOKEN") or "")[-4:],
+        "notion_db_set": bool(os.getenv("NOTION_EPISODES_DATABASE_ID")),
+        "notion_db_last4": (os.getenv("NOTION_EPISODES_DATABASE_ID") or "")[-4:],
     }
 
 
@@ -1291,16 +1330,22 @@ def apply_settings(payload: dict) -> dict:
     provider = payload.get("provider")
     if provider not in PROVIDERS:
         return {"error": f"unknown provider {provider}"}
+    episodic_store = payload.get("episodic_store")
+    if episodic_store is not None and episodic_store not in ("sqlite", "notion"):
+        return {"error": f"unknown episodic_store {episodic_store}"}
     before = {"provider": os.getenv("WAKU_PROVIDER", ""),
               "model": os.getenv("WAKU_MODEL", ""),
               "small_model": os.getenv("WAKU_SMALL_MODEL", "")}
-    writable = ({"WAKU_PROVIDER", "WAKU_MODEL", "WAKU_SMALL_MODEL", "TAVILY_API_KEY"}
+    writable = ({"WAKU_PROVIDER", "WAKU_MODEL", "WAKU_SMALL_MODEL", "TAVILY_API_KEY",
+                 "WAKU_EPISODIC_STORE", "NOTION_TOKEN", "NOTION_EPISODES_DATABASE_ID"}
                 | {p.key_env for p in PROVIDERS.values()})
     env_path = find_dotenv(usecwd=True) or ".env"
 
     updates = {"WAKU_PROVIDER": provider,
                "WAKU_MODEL": payload.get("model", "") or "",
                "WAKU_SMALL_MODEL": payload.get("small_model", "") or ""}
+    if episodic_store:
+        updates["WAKU_EPISODIC_STORE"] = episodic_store
     # Changing provider never carries a model across endpoints (live bug:
     # kimi->gemini kept gate model kimi-k3 and every turn 404'd on Gemini). But
     # if the user didn't newly type a model, use THIS provider's default (their
@@ -1314,6 +1359,13 @@ def apply_settings(payload: dict) -> dict:
             updates["WAKU_SMALL_MODEL"] = ""
     for k, v in (payload.get("keys") or {}).items():
         if k in writable and v:  # only non-empty keys overwrite
+            if k == "NOTION_EPISODES_DATABASE_ID":
+                from waku.memory.episodic.notion_store import normalize_database_id
+
+                try:
+                    v = normalize_database_id(v)
+                except ValueError as exc:
+                    return {"error": str(exc)}
             updates[k] = v
     for k, v in updates.items():
         if k in writable:

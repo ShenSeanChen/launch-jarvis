@@ -100,14 +100,17 @@ function memSemantic(d){
   return h;
 }
 function memEpisodic(d){
-  let h = `<div class="card" style="background:var(--accent-soft);border-color:var(--line2)">
+  const src = d.episodes_source || "sqlite";
+  let h = `<div class="meta" style="margin-bottom:8px">backend: <span class="srcpill">${esc(src)}</span></div>`;
+  if (d.episodes_error) h += `<div class="card empty">Could not read episodes from Notion: ${esc(d.episodes_error)}</div>`;
+  h += `<div class="card" style="background:var(--accent-soft);border-color:var(--line2)">
     <b>Why is this small?</b> <span class="r">Episodic memory holds one <i>distilled</i> summary per
     consolidation, not every message. The raw, blow-by-blow conversation lives in the
     <a class="reveal" onclick="location.hash='database/chat_log'"><code>chat_log</code> table</a>
     (the big one) on the Database tab — episodes are its highlights.</span></div>`;
   h += `<div class="card" style="padding:4px 8px"><table><tr><th>date</th><th>episode</th><th></th></tr>${
     d.episodes.map(e => `<tr><td class="meta">${esc(e.happened_at)}</td><td>${esc(e.summary)}</td>
-      <td><a class="reveal del" onclick="delMem('delete_episode',${e.id})">delete</a></td></tr>`).join("")}</table></div>`;
+      <td><a class="reveal del" onclick="delMem('delete_episode','${e.id}')">delete</a></td></tr>`).join("")}</table></div>`;
   return h;
 }
 function memSkills(d){
@@ -275,6 +278,26 @@ const VIEWS = {
       <div style="margin-top:12px"><button class="save" onclick="saveSettings()">Save &amp; switch</button>
         <span class="meta" id="set-msg" style="margin-left:10px"></span></div>
     </div>
+    <h2>Episodic memory</h2><div class="card">
+      <div class="meta" style="margin-bottom:8px">Where dated episode summaries live. Default is the local
+        <code>state.db</code> (zero setup). Pick <code>notion</code> to store them in a Notion database instead
+        (requires <code>pip install -e '.[notion]'</code>).</div>
+      <label class="fld">Backend
+        <select id="set-episodic-store" onfocus="markEditing()">
+          <option value="sqlite" ${st.episodic_store!=="notion"?"selected":""}>sqlite — local state.db (default)</option>
+          <option value="notion" ${st.episodic_store==="notion"?"selected":""}>notion — a Notion database</option>
+        </select></label>
+      <label class="fld"><span>Notion token <span class="meta">(NOTION_TOKEN)</span>
+        ${st.notion_token_set?`<span class="srcpill" style="background:var(--good-soft);color:var(--good)">set ····${esc(st.notion_token_last4)}</span>`
+                             :`<span class="srcpill apple">not set</span>`}</span>
+        <input type="password" data-key="NOTION_TOKEN" placeholder="${st.notion_token_set?"key on file — blank keeps it":"paste integration token"}"></label>
+      <label class="fld"><span>Notion database link <span class="meta">(paste the link from Notion)</span>
+        ${st.notion_db_set?`<span class="srcpill" style="background:var(--good-soft);color:var(--good)">set ····${esc(st.notion_db_last4)}</span>`
+                          :`<span class="srcpill apple">not set</span>`}</span>
+        <input data-key="NOTION_EPISODES_DATABASE_ID" placeholder="${st.notion_db_set?"database link on file — blank keeps it":"paste the database link"}"></label>
+      <div style="margin-top:12px"><button class="save" onclick="saveSettings()">Save &amp; switch</button>
+        <span class="meta" style="margin-left:10px">rebuilds the agent in-process — a bad token leaves notion selected with the error shown on Memory ▸ Episodic; fix the token or switch back</span></div>
+    </div>
     <h2 id="catalog-h" style="display:none">Model catalog: click to switch</h2>
     <div class="card" id="catalog" style="display:none"></div>
     <h2>Web search key (optional)</h2><div class="card">
@@ -337,7 +360,11 @@ const VIEWS = {
     if (sub !== "overview"){
       const t = tables.find(x => x.name === sub);
       if (!t) return h + `<div class="card empty">no such table</div>`;
-      return h + `<div class="meta" style="margin-bottom:10px">${DB_DESC[t.name]||""}</div>` + dbTable(t);
+      const notionNote = (t.name === "episodes" && d.episodes_source === "notion")
+        ? `<div class="meta" style="margin-bottom:10px">Episodes currently live in Notion — see
+            <a class="reveal" onclick="location.hash='memory/episodic'">Memory ▸ Episodic</a>.
+            The rows below are the old local copy in state.db.</div>` : "";
+      return h + notionNote + `<div class="meta" style="margin-bottom:10px">${DB_DESC[t.name]||""}</div>` + dbTable(t);
     }
     const kb = (db.size/1024).toFixed(1);
     h += `<div class="card" style="border-color:var(--accent);background:var(--accent-soft)">
@@ -441,4 +468,3 @@ const VIEWS = {
     return h;
   },
 };
-

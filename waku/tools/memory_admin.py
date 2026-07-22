@@ -44,7 +44,9 @@ def make_manage_memory_tool(memory) -> Tool:
             return f"Updated fact #{id}." if ok else f"No fact with id {id}."
         if action == "delete":
             if kind == "episode":
-                return f"Deleted episode #{id}." if episodes.delete(int(id)) else f"No episode with id {id}."
+                # sqlite ids are ints; notion page ids are UUID strings — coerce by shape.
+                rid = int(id) if str(id).isdigit() else str(id)
+                return f"Deleted episode #{id}." if episodes.delete(rid) else f"No episode with id {id}."
             return f"Deleted fact #{id}." if facts.delete(int(id)) else f"No fact with id {id}."
         return "action must be one of: search, update, delete"
 
@@ -52,7 +54,7 @@ def make_manage_memory_tool(memory) -> Tool:
         name="manage_memory",
         description=(
             "Search, correct, or delete the user's long-term memory (facts and episodes). "
-            "ALWAYS search first to get the numeric id, then update or delete that id. "
+            "ALWAYS search first to get the id, then update or delete that id. "
             "Use when the user says something you remember is wrong or should be forgotten."
         ),
         input_schema={
@@ -60,7 +62,8 @@ def make_manage_memory_tool(memory) -> Tool:
             "properties": {
                 "action": {"type": "string", "enum": ["search", "update", "delete"]},
                 "kind": {"type": "string", "enum": ["fact", "episode"], "description": "default fact"},
-                "id": {"type": "integer", "description": "row id (from a prior search)"},
+                "id": {"type": ["integer", "string"],
+                       "description": "row id (from a prior search); a number for sqlite, a page id string when the notion backend is active"},
                 "query": {"type": "string", "description": "keywords for search"},
                 "content": {"type": "string", "description": "new text for update"},
                 "subject": {"type": "string", "description": "optional new subject for a fact update"},

@@ -4,6 +4,7 @@
   waku dashboard             the browser cockpit → localhost:7777 (+ Telegram if configured)
   waku voice                 talk to it (needs the [voice] extra)
   waku telegram              phone → laptop (needs TELEGRAM_BOT_TOKEN)
+  waku whatsapp              WhatsApp → laptop (needs WHATSAPP_TOKEN, public URL)
   waku brief                 morning briefing (calendar + mail + memory)
   waku skill install <url>   install a community skill
 """
@@ -31,6 +32,10 @@ def main() -> None:
         from waku.gateway.telegram import main as tg_main
 
         tg_main()
+    elif args[0] == "whatsapp":
+        from waku.gateway.whatsapp import main as wa_main
+
+        wa_main()
     elif args[0] == "brief":
         from waku.ops.brief import main as brief_main
 

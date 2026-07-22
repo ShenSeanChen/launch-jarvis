@@ -33,6 +33,10 @@ tracing = [
 telegram = [
     "python-telegram-bot>=21.0",
 ]
+# Optional gateway: WhatsApp via Meta Cloud API (needs a public URL — see docstring)
+whatsapp = [
+    "httpx>=0.25",
+]
 # Optional gateway: talk to your laptop. TTS uses macOS `say` by default;
 # for the neural British voice: pip install kokoro soundfile (pulls torch).
 voice = [

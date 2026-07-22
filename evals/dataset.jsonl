@@ -5,3 +5,7 @@
 {"id": "no-tool-general-knowledge", "input": "What is the capital of France?", "expect_tool": null}
 {"id": "pokemon-team", "input": "Build me a Kanto starter team around Pikachu: search current competitive picks for a balanced six, remember that Pikachu is my starter, and schedule two team-training sessions this week", "expect_tool": "save_note", "expect_in_args": {"content": "pikachu"}, "expect_min_tool_calls": 3}
 {"id": "worldcup-final", "input": "Search for the result of the Spain vs Argentina World Cup final, remember who won, and draft a message to Raj about watching the highlights together", "expect_tool": "send_message", "expect_in_args": {"to": "raj"}, "expect_min_tool_calls": 3}
+{"id": "chitchat-no-action", "input": "I might grab coffee with Alex sometime, we'll see.", "expect_tool": null}
+{"id": "exact-count-sessions", "input": "Block three 25-minute focus sessions tomorrow morning", "expect_tool": "create_event", "expect_min_tool_calls": 3}
+{"id": "remember-and-book", "input": "Remember that I'm vegetarian, then book dinner with Sam this Thursday at 7pm", "expect_tool": "create_event", "expect_in_args": {"title": "sam"}, "expect_min_tool_calls": 2}
+{"id": "read-before-write", "input": "Check my calendar for a free 30 minutes this afternoon and schedule a short walk", "expect_tool": "create_event", "expect_min_tool_calls": 2}

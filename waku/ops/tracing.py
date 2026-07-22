@@ -86,6 +86,10 @@ class Tracer:
             return  # streaming token deltas are for the live UI, not the trace
         if kind == "llm":
             self._record_usage(event)
+            # stamp WHICH brain answered — in a multi-model world (shootouts,
+            # live model switching) a trace without the model is half a trace
+            event = {"provider": self.settings.provider,
+                     "model": self.settings.model or "", **event}
         self._write({"type": kind, **event})
         if self._otel_tracer and self._span_ctx is not None:
             with self._otel_tracer.start_as_current_span(

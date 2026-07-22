@@ -38,14 +38,33 @@ class Provider:
     # anthropic wire but lists models on its OpenAI-compatible API). The
     # defaults above are just starting points — any listed model is one click.
     catalog_url: str | None = None
+    # The two models the chat switcher pins by default for this provider: a
+    # flagship (top quality) and a fast one (cheap/low-latency). Distinct from
+    # model/small_model — e.g. anthropic's loop default is sonnet-5, but the
+    # flagship you'd showcase is opus-4.8. Blank falls back to model/small_model.
+    flagship: str = ""
+    fast: str = ""
+
+    def default_pair(self) -> list[str]:
+        """[flagship, fast], deduped — the switcher's default picks."""
+        pair = [self.flagship or self.model, self.fast or self.small_model]
+        return list(dict.fromkeys(m for m in pair if m))
 
 
 PROVIDERS: dict[str, Provider] = {
     "anthropic": Provider("anthropic", "ANTHROPIC_API_KEY", None,
                           "claude-sonnet-5", "claude-haiku-4-5-20251001",
-                          catalog_url="https://api.anthropic.com/v1/models"),
+                          catalog_url="https://api.anthropic.com/v1/models",
+                          flagship="claude-opus-4-8", fast="claude-sonnet-5"),
+    # The gpt-5.6 REASONING models (luna/sol/terra) can't use function tools on
+    # /v1/chat/completions (they need /v1/responses), so every Waku turn 400s on
+    # them. The non-reasoning "chat" line DOES call tools fine; gpt-5.3-chat-latest
+    # is the newest concrete one (preferred over the gpt-5-chat-latest alias so a
+    # benchmark is reproducible). gpt-4.1-mini is a cheap tool-capable gate.
+    # base_url is None (SDK default) so point the picker at OpenAI's catalog.
     "openai":    Provider("openai", "OPENAI_API_KEY", None,
-                          "gpt-5.6", "gpt-5.6-luna"),
+                          "gpt-5.3-chat-latest", "gpt-4.1-mini",
+                          catalog_url="https://api.openai.com/v1/models"),
     # one key, every lab's models, and a $0 tier: the default models below are
     # free ids (":free" suffix). Rate-limited (~50 req/day without credits).
     "openrouter": Provider("openai", "OPENROUTER_API_KEY", "https://openrouter.ai/api/v1",
@@ -53,7 +72,10 @@ PROVIDERS: dict[str, Provider] = {
                            "google/gemma-4-26b-a4b-it:free"),
     "gemini":    Provider("openai", "GEMINI_API_KEY",
                           "https://generativelanguage.googleapis.com/v1beta/openai/",
-                          "gemini-3.5-flash", "gemini-3.1-flash-lite"),
+                          "gemini-3.5-flash", "gemini-3.1-flash-lite",
+                          # Google's Pro tier isn't "gemini-3.5-pro" (that id
+                          # 404s); the current Pro is gemini-3.1-pro-preview.
+                          flagship="gemini-3.1-pro-preview", fast="gemini-3.5-flash"),
     "deepseek":  Provider("openai", "DEEPSEEK_API_KEY", "https://api.deepseek.com",
                           "deepseek-v4-pro", "deepseek-v4-pro"),
     "minimax":   Provider("anthropic", "MINIMAX_API_KEY", "https://api.minimaxi.com/anthropic",
@@ -63,9 +85,16 @@ PROVIDERS: dict[str, Provider] = {
     # checked). Override with WAKU_SMALL_MODEL=kimi-k3 if your key is K3-only.
     "kimi":      Provider("anthropic", "MOONSHOT_API_KEY", "https://api.moonshot.ai/anthropic",
                           "kimi-k3", "kimi-k2.6",
-                          catalog_url="https://api.moonshot.ai/v1/models"),
+                          catalog_url="https://api.moonshot.ai/v1/models",
+                          flagship="kimi-k3", fast="kimi-k2.7-code-highspeed"),
     "glm":       Provider("anthropic", "ZHIPU_API_KEY", "https://api.z.ai/api/anthropic",
                           "glm-5.2", "glm-5-turbo"),
+    # xAI Grok on its OpenAI-compatible endpoint. The model ids below are
+    # starting points — add XAI_API_KEY and the picker lists the live catalog
+    # (the authoritative source); pin whatever the current flagship/fast are.
+    "xai":       Provider("openai", "XAI_API_KEY", "https://api.x.ai/v1",
+                          "grok-4", "grok-4-fast",
+                          catalog_url="https://api.x.ai/v1/models"),
 }
 
 
@@ -77,11 +106,20 @@ def get_client(settings: Settings):
         raise SystemExit(f"Unknown WAKU_PROVIDER '{settings.provider}'. "
                          f"Pick one of: {', '.join(PROVIDERS)}")
 
-    api_key = settings.api_key or os.getenv(provider.key_env, "")
+    # .strip() so a trailing newline/space from a copy-paste doesn't corrupt the
+    # auth header (headers are latin-1; a stray non-ASCII char errors cryptically).
+    api_key = (settings.api_key or os.getenv(provider.key_env, "")).strip()
     if not api_key:
         raise SystemExit(
             f"No API key for provider '{settings.provider}'. "
             f"Set {provider.key_env} in .env (see .env.example)."
+        )
+    try:
+        api_key.encode("latin-1")
+    except UnicodeEncodeError:
+        raise SystemExit(
+            f"{provider.key_env} contains a non-ASCII character (e.g. a smart quote "
+            f"or arrow from a bad paste). Re-paste the key with no spaces or line breaks."
         )
 
     settings.model = settings.model or provider.model
@@ -124,11 +162,16 @@ class OpenAICompatClient:
             elif message["role"] == "assistant":
                 # anthropic content blocks → assistant text + tool_calls
                 text = "".join(b.text for b in content if getattr(b, "type", "") == "text")
-                calls = [
-                    {"id": b.id, "type": "function",
-                     "function": {"name": b.name, "arguments": json.dumps(b.input)}}
-                    for b in content if getattr(b, "type", "") == "tool_use"
-                ]
+                calls = []
+                for b in content:
+                    if getattr(b, "type", "") != "tool_use":
+                        continue
+                    call = {"id": b.id, "type": "function",
+                            "function": {"name": b.name, "arguments": json.dumps(b.input)}}
+                    extra = getattr(b, "extra", None)   # Gemini thought_signature
+                    if extra:
+                        call["extra_content"] = extra
+                    calls.append(call)
                 entry: dict = {"role": "assistant", "content": text or None}
                 if calls:
                     entry["tool_calls"] = calls
@@ -157,10 +200,16 @@ class OpenAICompatClient:
     def _call(self, kwargs: dict, **extra):
         """Run chat.completions.create with the max_tokens key-name fallback
         (older OpenAI-compatible endpoints only know max_tokens, not the newer
-        max_completion_tokens)."""
+        max_completion_tokens). Only retry when the error is ABOUT that param —
+        retrying on any error masked the real failure (e.g. a gpt-5.x call would
+        fail for some other reason, then the max_tokens retry buried it under a
+        confusing 'use max_completion_tokens' message)."""
         try:
             return self._client.chat.completions.create(**kwargs, **extra)
-        except Exception:
+        except Exception as exc:
+            m = str(exc).lower()
+            if "max_completion_tokens" not in m and "max_tokens" not in m:
+                raise
             k = dict(kwargs)
             k["max_tokens"] = k.pop("max_completion_tokens", None)
             return self._client.chat.completions.create(**k, **extra)
@@ -182,6 +231,11 @@ class OpenAICompatClient:
             blocks.append(SimpleNamespace(
                 type="tool_use", id=call.id, name=call.function.name,
                 input=json.loads(call.function.arguments or "{}"),
+                # Gemini's thinking models attach a thought_signature here and
+                # REQUIRE it echoed back with the tool call next turn, else the
+                # follow-up 400s ("missing a thought_signature"). Carry it so
+                # _to_openai can put it back. None for every other provider.
+                extra=getattr(call, "extra_content", None),
             ))
         usage = getattr(response, "usage", None)
         return SimpleNamespace(

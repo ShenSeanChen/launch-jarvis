@@ -43,5 +43,8 @@ gate:           ## the release gate: deterministic must pass, judge must clear t
 shootout:       ## same tasks, different brains: make shootout RUNS="kimi:kimi-k3 anthropic:claude-opus-4-8"
 	$(PY) scripts/shootout.py $(RUNS)
 
+shootout-coding: ## coding round via pi, scored by tests: make shootout-coding RUNS="kimi:kimi-k3 anthropic:claude-opus-4-8"
+	$(PY) scripts/shootout.py $(RUNS) --coding
+
 lint:
 	$(PY) -m ruff check waku evals

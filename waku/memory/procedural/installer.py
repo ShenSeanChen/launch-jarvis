@@ -35,7 +35,7 @@ def install(url: str) -> None:
     settings.ensure_home()
     tmp = settings.home / "skills" / "_incoming" / "SKILL.md"
     tmp.parent.mkdir(parents=True, exist_ok=True)
-    tmp.write_text(text)
+    tmp.write_text(text, encoding="utf-8")
 
     skill = _parse(tmp)
     if skill is None:

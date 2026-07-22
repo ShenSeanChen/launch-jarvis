@@ -7,8 +7,8 @@ license = { text = "MIT" }
 authors = [{ name = "Sean Chen (ShenSeanChen)" }]
 requires-python = ">=3.11"
 dependencies = [
-    "anthropic>=0.40",   # anthropic wire format: Anthropic, Kimi, GLM
-    "openai>=1.50",      # openai wire format: OpenAI, Gemini (and embeddings)
+    "anthropic>=0.40",   # anthropic wire format: Anthropic, Kimi, GLM, MiniMax
+    "openai>=1.50",      # openai wire format: OpenAI, Gemini, DeepSeek (and embeddings)
     "python-dotenv>=1.0",
     "rich>=13.0",
 ]
@@ -49,6 +49,11 @@ voice-neural = [
 # Optional semantic-memory upgrade path: Supabase pgvector (see launch-rag)
 supabase = [
     "supabase>=2.0",
+]
+# Optional episodic-memory backend: Notion database
+# Requires >=2.5: the adapter uses the data_sources API (Notion API 2025-09-03).
+notion = [
+    "notion-client>=2.5",
 ]
 # Optional: connect MCP servers (.waku/mcp.json)
 mcp = [

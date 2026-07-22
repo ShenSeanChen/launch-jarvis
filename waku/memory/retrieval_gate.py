@@ -41,10 +41,14 @@ def should_retrieve(
     try:
         response = client.messages.create(
             model=small_model,
-            max_tokens=100,
+            # generous budget: reasoning models (Kimi K3, ...) spend a thinking
+            # block BEFORE the JSON — 100 tokens was truncating the answer away
+            max_tokens=600,
             messages=[{"role": "user", "content": GATE_PROMPT.format(message=message)}],
         )
         text = "".join(b.text for b in response.content if b.type == "text")
+        if "{" not in text:   # a reasoning-only / truncated reply, not an error
+            return True, message, "gate returned no JSON — failing open"
         decision = json.loads(text[text.index("{") : text.rindex("}") + 1])
         return bool(decision.get("retrieve")), decision.get("query", message), decision.get("reason", "")
     except Exception as exc:

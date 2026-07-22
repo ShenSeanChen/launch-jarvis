@@ -102,7 +102,19 @@ def main(reset_spend: bool = False) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Reset .waku to a clean demo state.")
+    parser.add_argument("--yes", "-y", action="store_true",
+                        help="required confirmation: yes, wipe .waku (it is backed up first)")
     parser.add_argument("--reset-spend", action="store_true",
                         help="also wipe usage.jsonl (the money/token spend ledger)")
     args = parser.parse_args()
+    if not args.yes:
+        # Safety gate: this destroys live memory/calendar/traces. Refuse unless the
+        # human explicitly confirms with --yes. See CLAUDE.md ("Never wipe runtime
+        # data without asking first"). It backs up, but restoring is a hassle.
+        print("REFUSING to run: demo_seed clears .waku (memory, calendar, chat, traces"
+              + (", AND spend" if args.reset_spend else "") + ").")
+        print("This is destructive. If you truly mean it, re-run with --yes:")
+        print("    python scripts/demo_seed.py --yes"
+              + (" --reset-spend" if args.reset_spend else ""))
+        raise SystemExit(2)
     main(reset_spend=args.reset_spend)

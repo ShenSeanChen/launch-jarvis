@@ -2,11 +2,11 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "jarvis-dashboard",
+      "name": "waku-dashboard",
       "runtimeExecutable": ".venv/bin/python",
       "runtimeArgs": ["-m", "waku.ops.dashboard"],
       "port": 7777,
-      "autoPort": true
+      "autoPort": false
     },
     {
       "name": "phoenix-traces",

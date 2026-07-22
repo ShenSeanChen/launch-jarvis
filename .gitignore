@@ -11,6 +11,8 @@ dist/
 .ruff_cache/
 .waku/
 .waku.bak-*/
-.jarvis.prerename-bak/
+.waku.prerename-bak/
 .env.prerename-bak
-.jarvis.bak-*/
+
+# Delegated coding deliverables (dated run folders + auto-run logs)
+waku_workspace/

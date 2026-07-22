@@ -31,7 +31,7 @@ class Memory:
         self.settings = settings
         self.client = client
         self.facts = self._make_fact_store(conn, settings)
-        self.episodes = SqliteEpisodeStore(conn)
+        self.episodes = self._make_episode_store(conn, settings)
         self.skills = SkillLoader([REPO_SKILLS, settings.home / "skills"])
 
     @staticmethod
@@ -41,6 +41,14 @@ class Memory:
 
             return SupabaseFactStore(settings)
         return SqliteFactStore(conn)
+
+    @staticmethod
+    def _make_episode_store(conn, settings):
+        if settings.episodic_store == "notion":
+            from waku.memory.episodic.notion_store import NotionEpisodeStore
+
+            return NotionEpisodeStore()
+        return SqliteEpisodeStore(conn)
 
     # ---- retrieval (gated — see retrieval_gate.py for why)
     def gated_retrieve(self, message: str, notify=None) -> str:
@@ -62,14 +70,17 @@ class Memory:
 
     # ---- write paths
     def log_chat(self, user_message: str, reply: str, session_id: str = "default",
-                 source: str = "cli") -> None:
+                 source: str = "cli", meta: dict | None = None) -> None:
+        import json as _json
         self.conn.execute(
             "INSERT INTO chat_log (role, content, session_id, source) VALUES ('user', ?, ?, ?)",
             (user_message, session_id, source),
         )
+        # meta (gate/latency/iterations/tools) rides on the assistant row so a
+        # reopened thread can render the full turn card, not just the text.
         self.conn.execute(
-            "INSERT INTO chat_log (role, content, session_id, source) VALUES ('assistant', ?, ?, ?)",
-            (reply, session_id, source),
+            "INSERT INTO chat_log (role, content, session_id, source, meta) VALUES ('assistant', ?, ?, ?, ?)",
+            (reply, session_id, source, _json.dumps(meta) if meta else None),
         )
         self.conn.commit()
 

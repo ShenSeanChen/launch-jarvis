@@ -7,7 +7,7 @@ teams skip and shouldn't.
 
 Two tiers:
   offline  — scripted model, always runs, tests OUR code (loop, tools, wiring)
-  live     — real model, runs when ANTHROPIC_API_KEY is set, tests the
+  live     — real model, runs when the active provider has a key, tests the
              MODEL+PROMPT behavior on evals/dataset.jsonl (the real eval)
 """
 
@@ -102,7 +102,7 @@ def test_iteration_guardrail_stops_runaway_loop(tmp_path):
 # ---------- live tier: the actual model eval over the dataset
 
 
-@pytest.mark.skipif(not HAS_KEY, reason="live eval needs ANTHROPIC_API_KEY")
+@pytest.mark.skipif(not HAS_KEY, reason="live eval needs the active provider's API key")
 @pytest.mark.parametrize("case", DATASET, ids=[c["id"] for c in DATASET])
 def test_dataset_case(case, tmp_path):
     app = make_waku(tmp_path / "home")
@@ -121,3 +121,7 @@ def test_dataset_case(case, tmp_path):
             assert needle.lower() in str(args.get(key, "")).lower(), (
                 f"expected '{needle}' in args[{key}], got: {args.get(key)}"
             )
+        # multi-tool cases (pokemon-team, worldcup-final): the loop must have
+        # actually looped, not satisfied one expectation and stopped
+        want = case.get("expect_min_tool_calls", 0)
+        assert len(fired) >= want, f"only {len(fired)} tool calls, wanted >= {want}"

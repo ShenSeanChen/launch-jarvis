@@ -1,4 +1,4 @@
--- Directory: launch-jarvis/sql/init_supabase.sql
+-- Directory: waku-agent/sql/init_supabase.sql
 -- Lifted unchanged from launch-agentic-rag (github.com/ShenSeanChen/launch-agentic-rag)
 -- so the vector upgrade path reuses the exact schema those videos teach.
 --

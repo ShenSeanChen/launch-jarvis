@@ -34,7 +34,18 @@ class Settings:
 
     # --- Loop guardrails
     max_iterations: int = field(default_factory=lambda: int(os.getenv("WAKU_MAX_ITERATIONS", "10")))
-    max_tokens: int = field(default_factory=lambda: int(os.getenv("WAKU_MAX_TOKENS", "2048")))
+    # Headroom matters for REASONING models (kimi-k3, gpt-5.x, gemini-*-pro):
+    # they spend output tokens thinking before the answer, so a low cap makes
+    # them hit stop_reason=max_tokens mid-thought and return an EMPTY reply
+    # (watched kimi-k3 do exactly that at 2048). 8192 leaves room to think AND
+    # answer; it's a ceiling, not a target, so efficient models still cost the same.
+    max_tokens: int = field(default_factory=lambda: int(os.getenv("WAKU_MAX_TOKENS", "8192")))
+    # Working memory is a SLIDING WINDOW (like context RAM): only the last N
+    # turns go into the prompt. Older turns aren't lost — they're in state.db,
+    # distilled into facts by consolidation, and pulled back by the retrieval
+    # gate when relevant. Without this cap a long thread (esp. the always-on
+    # Telegram session) resends its whole history every turn until it explodes.
+    history_turns: int = field(default_factory=lambda: int(os.getenv("WAKU_HISTORY_TURNS", "12")))
 
     # --- Memory
     # Consolidate (distill chats into durable facts) only after N new exchanges.
@@ -42,6 +53,8 @@ class Settings:
     retrieval_top_k: int = field(default_factory=lambda: int(os.getenv("WAKU_RETRIEVAL_TOP_K", "4")))
     # 'sqlite' (default, zero setup) or 'supabase' (pgvector upgrade path — see launch-rag).
     semantic_store: str = field(default_factory=lambda: os.getenv("WAKU_SEMANTIC_STORE", "sqlite"))
+    # 'sqlite' (default, zero setup) or 'notion' (episodes live in a Notion database).
+    episodic_store: str = field(default_factory=lambda: os.getenv("WAKU_EPISODIC_STORE", "sqlite"))
 
     # --- Tools
     # Sync created events into Apple Calendar (a dedicated "Waku" calendar)
@@ -53,6 +66,12 @@ class Settings:
     # (macOS; first use triggers the system Automation permission prompts).
     apple_tools: bool = field(
         default_factory=lambda: os.getenv("WAKU_APPLE_TOOLS", "") in ("1", "true", "yes")
+    )
+    # Register the experimental tools (delegate_task -> pi sub-agent, ...). Env is
+    # the global switch; the arena sets this per-race so a coding race can hand
+    # work to pi WITHOUT flipping it on for the whole process.
+    experimental: bool = field(
+        default_factory=lambda: os.getenv("WAKU_EXPERIMENTAL", "") in ("1", "true", "yes")
     )
 
     # --- Optional gateway

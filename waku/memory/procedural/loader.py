@@ -41,7 +41,7 @@ def _parse_text(text: str, path: Path) -> Skill | None:
 
 
 def _parse(path: Path) -> Skill | None:
-    return _parse_text(path.read_text(), path)
+    return _parse_text(path.read_text(encoding="utf-8"), path)
 
 
 class SkillLoader:

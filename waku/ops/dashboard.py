@@ -31,6 +31,7 @@ from pathlib import Path
 from waku.config import load_settings
 from waku.db import connect
 from waku.ops import compare_history, judge as judge_mod, scoring
+from waku.ops.tracing import TraceEncodingError, iter_trace_lines
 
 PORT = 7777
 # The frontend lives in its own files (static/index.html + style.css + app.js),
@@ -620,9 +621,15 @@ def collect() -> dict:
 
     # --- traces → turns (group events between turn_start and turn_end)
     events = []
+    trace_errors = []
     trace_files = sorted((home / "traces").glob("*.jsonl"))
     for path in trace_files:
-        for line in path.read_text().splitlines():
+        try:
+            lines = list(iter_trace_lines(path))
+        except TraceEncodingError as exc:
+            trace_errors.append({"file": path.name, "error": str(exc)})
+            continue
+        for line in lines:
             try:
                 events.append(json.loads(line))
             except json.JSONDecodeError:
@@ -753,6 +760,7 @@ def collect() -> dict:
                                    or e.get("reply") or "")}
                        for e in events[-18:]][::-1],
         "trace_file": (trace_files[-1].name if trace_files else None),
+        "trace_errors": trace_errors,
         "facts": rows("SELECT id, subject, content, source, created_at FROM facts ORDER BY id DESC"),
         "episodes": episodes_data["items"],
         "episodes_source": episodes_data["source"],
@@ -1447,7 +1455,10 @@ def events_since(cursor):
     path = settings.home / "traces" / (datetime.now().strftime("%Y-%m-%d") + ".jsonl")
     if not path.exists():
         return {"events": [], "cursor": 0}
-    lines = path.read_text().splitlines()
+    try:
+        lines = list(iter_trace_lines(path))
+    except TraceEncodingError as exc:
+        return {"events": [], "cursor": 0, "error": str(exc)}
     if cursor is None or cursor < 0 or cursor > len(lines):
         return {"events": [], "cursor": len(lines)}
     out = []

@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -557,6 +558,28 @@ def _tool_status(output: str) -> str:
     return "ok"
 
 
+# Notion-backed episodes live across the network, so the client AND the result
+# are cached with a short TTL — collect() runs on every dashboard auto-refresh
+# and must not round-trip to Notion every few seconds (rate limits + latency).
+# The sqlite path is a local query and doesn't need this.
+_NOTION_EPISODES_TTL = 30.0   # seconds; the page polls ~every 5s
+_notion_lock = threading.Lock()
+_notion_store = None                       # built once (its constructor calls Notion)
+_notion_episodes: tuple[float, list] | None = None   # (fetched_at, items)
+
+
+def _get_notion_store():
+    """The ONE NotionEpisodeStore for the whole dashboard process. Its
+    constructor round-trips to Notion (data-source resolution), so it's built
+    lazily and cached. Callers must hold _notion_lock."""
+    global _notion_store
+    if _notion_store is None:
+        from waku.memory.episodic.notion_store import NotionEpisodeStore
+
+        _notion_store = NotionEpisodeStore()
+    return _notion_store
+
+
 def collect() -> dict:
     """Everything the page shows, in one JSON blob."""
     settings = load_settings()
@@ -579,11 +602,19 @@ def collect() -> dict:
                 ),
             }
         try:
-            from waku.memory.episodic.notion_store import NotionEpisodeStore
-
-            return {"source": "notion", "error": "", "items": NotionEpisodeStore().list()}
+            global _notion_episodes
+            with _notion_lock:
+                store = _get_notion_store()
+                if _notion_episodes and time.time() - _notion_episodes[0] < _NOTION_EPISODES_TTL:
+                    return {"source": "notion", "error": "", "items": _notion_episodes[1]}
+                items = store.list()
+                _notion_episodes = (time.time(), items)
+                return {"source": "notion", "error": "", "items": items}
         except Exception as exc:
-            return {"source": "notion", "error": str(exc), "items": []}
+            # Degrade gracefully: never take the payload down, and serve the
+            # last good fetch if we have one (an outage shouldn't blank the tab).
+            stale = _notion_episodes[1] if _notion_episodes else []
+            return {"source": "notion", "error": str(exc), "items": stale}
 
     episodes_data = episodes_payload()
 
@@ -834,7 +865,13 @@ def tools_info() -> dict:
 
         conn = connect(settings.home)
         try:
-            mem = Memory(conn, settings, None)
+            # Notion mode: reuse the dashboard's one cached client instead of
+            # letting Memory() build a fresh one per poll (issue #20).
+            episode_store = None
+            if settings.episodic_store == "notion":
+                with _notion_lock:
+                    episode_store = _get_notion_store()
+            mem = Memory(conn, settings, None, episode_store=episode_store)
         except Exception:
             # A misconfigured optional backend (notion/supabase) must not take
             # the dashboard down — drop the memory-admin tools from the
@@ -1058,9 +1095,13 @@ def memory_action(payload: dict) -> dict:
     conn = connect(settings.home)
     facts, episodes = SqliteFactStore(conn), SqliteEpisodeStore(conn)
     if action == "delete_episode" and settings.episodic_store == "notion":
-        from waku.memory.episodic.notion_store import NotionEpisodeStore
-
-        return {"ok": NotionEpisodeStore().delete(str(payload.get("id", "")))}
+        global _notion_episodes
+        with _notion_lock:
+            ok = _get_notion_store().delete(str(payload.get("id", "")))
+            # bust the TTL cache so the next collect() refetches — otherwise a
+            # deleted episode would linger on the page for up to 30s
+            _notion_episodes = None
+        return {"ok": ok}
     try:
         rid = int(payload.get("id", 0))
     except (TypeError, ValueError):

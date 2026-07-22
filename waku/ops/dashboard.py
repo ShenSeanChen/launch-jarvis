@@ -130,7 +130,7 @@ def usage_summary(home) -> dict:
     recs = []
     path = home / "usage.jsonl"
     if path.exists():
-        for line in path.read_text().splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():
             try:
                 recs.append(json.loads(line))
             except json.JSONDecodeError:
@@ -195,7 +195,7 @@ def collect() -> dict:
     events = []
     trace_files = sorted((home / "traces").glob("*.jsonl"))
     for path in trace_files:
-        for line in path.read_text().splitlines():
+        for line in path.read_text(encoding="utf-8").splitlines():
             try:
                 events.append(json.loads(line))
             except json.JSONDecodeError:
@@ -260,19 +260,19 @@ def collect() -> dict:
     eval_report = None
     report_path = home / "eval_report.json"
     if report_path.exists():
-        eval_report = json.loads(report_path.read_text())
+        eval_report = json.loads(report_path.read_text(encoding="utf-8"))
 
     eval_history = []
     hist_path = home / "eval_runs.jsonl"
     if hist_path.exists():
-        for line in hist_path.read_text().splitlines()[-20:]:
+        for line in hist_path.read_text(encoding="utf-8").splitlines()[-20:]:
             try:
                 eval_history.append(json.loads(line))
             except json.JSONDecodeError:
                 pass
     eval_history.reverse()
 
-    outbox = [{"name": p.name, "text": p.read_text()[:400]}
+    outbox = [{"name": p.name, "text": p.read_text(encoding="utf-8")[:400]}
               for p in sorted((home / "outbox").glob("*.txt"), reverse=True)[:20]]
 
     # --- state.db introspection: the actual SQLite tables, so the persistence
@@ -326,7 +326,7 @@ def collect() -> dict:
         "trace_file": (trace_files[-1].name if trace_files else None),
         "facts": rows("SELECT id, subject, content, source, created_at FROM facts ORDER BY id DESC"),
         "episodes": rows("SELECT id, happened_at, summary FROM episodes ORDER BY happened_at DESC"),
-        "soul": (home / "SOUL.md").read_text() if (home / "SOUL.md").exists() else "",
+        "soul": (home / "SOUL.md").read_text(encoding="utf-8") if (home / "SOUL.md").exists() else "",
         "chat_pending": conn.execute("SELECT COUNT(*) FROM chat_log WHERE consolidated=0").fetchone()[0],
         "chat_log": rows("SELECT role, content, consolidated, source, session_id, created_at FROM chat_log ORDER BY id DESC LIMIT 80")[::-1],
         "sessions": session_list(conn),
@@ -418,7 +418,7 @@ def tools_info() -> dict:
     if mcp_path.exists():
         mcp["configured"] = True
         try:
-            mcp["servers"] = [s.get("name", "?") for s in json.loads(mcp_path.read_text()).get("servers", [])]
+            mcp["servers"] = [s.get("name", "?") for s in json.loads(mcp_path.read_text(encoding="utf-8")).get("servers", [])]
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -726,7 +726,7 @@ def events_since(cursor):
     path = settings.home / "traces" / (datetime.now().strftime("%Y-%m-%d") + ".jsonl")
     if not path.exists():
         return {"events": [], "cursor": 0}
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     if cursor is None or cursor < 0 or cursor > len(lines):
         return {"events": [], "cursor": len(lines)}
     out = []

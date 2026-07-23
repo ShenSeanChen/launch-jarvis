@@ -62,6 +62,14 @@ class Settings:
     apple_calendar: bool = field(
         default_factory=lambda: os.getenv("WAKU_APPLE_CALENDAR", "") in ("1", "true", "yes")
     )
+    # Mirror locally-created events to Google Calendar. SQLite + ICS remain the
+    # source of truth; this is only an opt-in write target.
+    google_calendar: bool = field(
+        default_factory=lambda: os.getenv("WAKU_GOOGLE_CALENDAR", "") in ("1", "true", "yes")
+    )
+    google_calendar_id: str = field(
+        default_factory=lambda: os.getenv("WAKU_GOOGLE_CALENDAR_ID", "") or "primary"
+    )
     # Give the agent read/write access to Apple Calendar, Mail, Reminders, Notes
     # (macOS; first use triggers the system Automation permission prompts).
     apple_tools: bool = field(

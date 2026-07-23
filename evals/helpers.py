@@ -54,8 +54,9 @@ def make_waku(home: Path, client=None, **settings_overrides):
     from waku.app import Waku
     from waku.config import Settings
 
-    # evals must NEVER touch the real Apple Calendar, whatever .env says
+    # evals must NEVER touch a real calendar, whatever .env says
     settings_overrides.setdefault("apple_calendar", False)
+    settings_overrides.setdefault("google_calendar", False)
     settings = Settings(home=home, **settings_overrides)
     if client is not None and not settings.api_key:
         settings.api_key = "offline"  # never read the real key for scripted runs

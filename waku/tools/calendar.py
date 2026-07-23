@@ -6,6 +6,8 @@ Where events land:
   opt-in      Apple Calendar, in a dedicated "Waku" calendar, via AppleScript —
               set WAKU_APPLE_CALENDAR=1. First use makes macOS ask permission
               for your terminal to control Calendar; approve once.
+  opt-in      Google Calendar via WAKU_GOOGLE_CALENDAR=1. Local files remain
+              authoritative if credentials, the network, or Google fail.
 
 The tool's return string always says exactly where the event went — the model
 relays it, so Waku never over-claims what happened.
@@ -17,11 +19,14 @@ import sqlite3
 import subprocess
 import sys
 from datetime import datetime
+from email.utils import parseaddr
 from pathlib import Path
 
 from waku.tools.registry import Tool
 
 APPLE_CALENDAR_NAME = "Waku"
+GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events"
+GOOGLE_CALENDAR_TIMEOUT = 30
 
 
 def _write_ics(home: Path, title: str, start: str, end: str, attendees: str) -> None:
@@ -116,8 +121,100 @@ end tell'''
     return f"Also added to Apple Calendar (calendar '{used}')."
 
 
-def make_tool(conn: sqlite3.Connection, home: Path, apple_calendar: bool = False) -> Tool:
-    def create_event(title: str = "", start: str = "", end: str = "", attendees: str = "", notes: str = "") -> str:
+def _google_event_body(
+    title: str, start: str, end: str, attendees: str = "", notes: str = ""
+) -> dict:
+    """Map the stable create_event fields to Google Calendar's event shape."""
+
+    def rfc3339(value: str) -> str:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.astimezone()
+        return parsed.isoformat()
+
+    body = {
+        "summary": title,
+        "start": {"dateTime": rfc3339(start)},
+        "end": {"dateTime": rfc3339(end)},
+    }
+    if notes:
+        body["description"] = notes
+    emails = [parseaddr(item.strip())[1] for item in attendees.split(",")]
+    emails = [email for email in emails if "@" in email]
+    if emails:
+        body["attendees"] = [{"email": email} for email in emails]
+    return body
+
+
+def sync_to_google_calendar(
+    title: str,
+    start: str,
+    end: str,
+    attendees: str = "",
+    notes: str = "",
+    calendar_id: str = "primary",
+) -> str:
+    """Create one Google Calendar event without changing the local-first contract."""
+    try:
+        import google.auth
+        import google_auth_httplib2
+        import httplib2
+        from googleapiclient.discovery import build
+    except ImportError:
+        return (
+            "Google Calendar sync FAILED (support is not installed; "
+            "install with pip install -e '.[gcal]') — the event is still in the "
+            "local calendar."
+        )
+
+    try:
+        credentials, _ = google.auth.default(scopes=[GOOGLE_CALENDAR_SCOPE])
+        bounded_http = httplib2.Http(timeout=GOOGLE_CALENDAR_TIMEOUT)
+        authorized_http = google_auth_httplib2.AuthorizedHttp(
+            credentials, http=bounded_http
+        )
+        service = build(
+            "calendar",
+            "v3",
+            http=authorized_http,
+            cache_discovery=False,
+            static_discovery=True,
+        )
+        (
+            service.events()
+            .insert(
+                calendarId=calendar_id,
+                body=_google_event_body(title, start, end, attendees, notes),
+                sendUpdates="none",
+            )
+            .execute(num_retries=0)
+        )
+    except Exception as exc:
+        detail = (str(exc).strip() or type(exc).__name__)[:160]
+        return (
+            f"Google Calendar sync FAILED ({detail}) — the event is still in the "
+            "local calendar."
+        )
+    return (
+        f"Also added to Google Calendar (calendar '{calendar_id}'; "
+        "attendee notifications suppressed)."
+    )
+
+
+def make_tool(
+    conn: sqlite3.Connection,
+    home: Path,
+    apple_calendar: bool = False,
+    google_calendar: bool = False,
+    google_calendar_id: str = "primary",
+) -> Tool:
+    def create_event(
+        title: str = "",
+        start: str = "",
+        end: str = "",
+        attendees: str = "",
+        notes: str = "",
+    ) -> str:
         # Defensive: models sometimes emit an empty/partial tool call. Return a
         # helpful message the model can recover from, not a raw Python TypeError.
         if not title or not start:
@@ -148,9 +245,19 @@ def make_tool(conn: sqlite3.Connection, home: Path, apple_calendar: bool = False
         where = f"Saved to the local calendar ({home / 'calendar.ics'})."
         if apple_calendar:
             where += " " + sync_to_apple_calendar(title, start, end, notes)
-        else:
+        if google_calendar:
+            where += " " + sync_to_google_calendar(
+                title,
+                start,
+                end,
+                attendees,
+                notes,
+                calendar_id=google_calendar_id,
+            )
+        if not apple_calendar and not google_calendar:
             where += (
-                " Not synced to any calendar app (enable with WAKU_APPLE_CALENDAR=1, "
+                " Not synced to any calendar app (enable with WAKU_APPLE_CALENDAR=1 "
+                "or WAKU_GOOGLE_CALENDAR=1, "
                 f"or import manually: open {home / 'calendar.ics'})."
             )
         return (

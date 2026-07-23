@@ -14,7 +14,15 @@ from waku.tools.registry import ToolRegistry
 
 def build_registry(conn: sqlite3.Connection, settings: Settings, memory=None) -> ToolRegistry:
     registry = ToolRegistry()
-    registry.register(calendar.make_tool(conn, settings.home, apple_calendar=settings.apple_calendar))
+    registry.register(
+        calendar.make_tool(
+            conn,
+            settings.home,
+            apple_calendar=settings.apple_calendar,
+            google_calendar=settings.google_calendar,
+            google_calendar_id=settings.google_calendar_id,
+        )
+    )
     registry.register(calendar.make_list_tool(conn))   # read side: "what's on my calendar?"
     registry.register(notes.make_tool(conn))
     registry.register(messages.make_tool(settings.home))

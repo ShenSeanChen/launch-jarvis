@@ -33,6 +33,14 @@ tracing = [
 telegram = [
     "python-telegram-bot>=21.0",
 ]
+# Optional write-through target for create_event; the local SQLite/ICS mock
+# remains the default and source of truth.
+gcal = [
+    "google-api-python-client>=2.0",
+    "google-auth>=2.0",
+    "google-auth-httplib2>=0.2",
+    "httplib2>=0.22",
+]
 # Optional gateway: talk to your laptop. TTS uses macOS `say` by default;
 # for the neural British voice: pip install kokoro soundfile (pulls torch).
 voice = [

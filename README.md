@@ -361,6 +361,25 @@ with clickable `message://` links. Cron it for a morning greeting:
 
 It runs through the normal harness, so it animates on the dashboard like any turn.
 
+## Mirror created events to Google Calendar
+
+The local SQLite database and `calendar.ics` stay authoritative. To also write
+`create_event` results to Google Calendar, install the opt-in extra and configure
+[Application Default Credentials](https://cloud.google.com/docs/authentication/provide-credentials-adc):
+
+```bash
+pip install -e '.[gcal]'
+gcloud auth application-default login \
+  --client-id-file=credentials.json \
+  --scopes=https://www.googleapis.com/auth/calendar.events
+WAKU_GOOGLE_CALENDAR=1 waku
+```
+
+The target defaults to the signed-in user's `primary` calendar; set
+`WAKU_GOOGLE_CALENDAR_ID` for another calendar. `list_events` still reads the
+local database. Google failures never roll back the local event, and attendee
+notifications are suppressed (`sendUpdates=none`).
+
 ## It manages its own memory
 
 The agent has tools to keep itself useful — no black box:
@@ -461,7 +480,7 @@ The point of a teaching repo is a readable core; these come alive one at a time,
 | Default (zero setup) | Upgrade | How |
 |---|---|---|
 | SQLite FTS5 keyword memory | Supabase pgvector semantic search | `WAKU_SEMANTIC_STORE=supabase` + [sql/init_supabase.sql](sql/init_supabase.sql) — the exact schema from [launch-rag](https://github.com/ShenSeanChen/launch-rag)/[launch-agentic-rag](https://github.com/ShenSeanChen/launch-agentic-rag) |
-| Mock calendar (ICS + SQLite) | Apple / Google Calendar | `WAKU_APPLE_CALENDAR=1` (macOS), or swap `waku/tools/calendar.py` — the tool schema stays |
+| Mock calendar (ICS + SQLite) | Apple / Google Calendar | `WAKU_APPLE_CALENDAR=1` (macOS) or `WAKU_GOOGLE_CALENDAR=1` with `pip install -e '.[gcal]'` — the tool schema stays |
 | Hand-built memory pillars | mem0 / Letta / Zep | production frameworks that automate what this repo teaches |
 
 ## Related repos (the building blocks)

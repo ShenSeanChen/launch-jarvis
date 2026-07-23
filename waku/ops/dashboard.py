@@ -203,8 +203,14 @@ def _compare_one(message: str, spec: str) -> dict:
     home = Path(tempfile.mkdtemp(prefix=f"compare-{provider}-"))
     gate: dict = {}
     try:
-        settings = Settings(provider=provider, model=model, small_model="",
-                            home=home, apple_calendar=False)
+        settings = Settings(
+            provider=provider,
+            model=model,
+            small_model="",
+            home=home,
+            apple_calendar=False,
+            google_calendar=False,
+        )
         app = Waku(settings=settings)
         t0 = time.perf_counter()
         result = app.respond(message, source="compare",
@@ -305,8 +311,15 @@ def compare_stream(message: str, specs: list, emit, judge: bool = False,
             # (gate, memory, tools), not a bypass. pi runs on this card's model.
             # apple_calendar defaults OFF (isolation), opt-in per race — when on,
             # EACH model writes its own event to the real 'Waku' calendar.
-            settings = Settings(provider=provider, model=model, small_model="",
-                                home=home, apple_calendar=apple, experimental=coding)
+            settings = Settings(
+                provider=provider,
+                model=model,
+                small_model="",
+                home=home,
+                apple_calendar=apple,
+                google_calendar=False,
+                experimental=coding,
+            )
             app = Waku(settings=settings)
             # A scored case may pre-load a fact (e.g. "applies memory") so every
             # model starts from the same state the checklist assumes.
@@ -885,7 +898,13 @@ def tools_info() -> dict:
             # the dashboard down — drop the memory-admin tools from the
             # display-only catalog instead.
             mem = None
-        tools = [calendar.make_tool(conn, settings.home, apple_calendar=settings.apple_calendar),
+        tools = [calendar.make_tool(
+                     conn,
+                     settings.home,
+                     apple_calendar=settings.apple_calendar,
+                     google_calendar=settings.google_calendar,
+                     google_calendar_id=settings.google_calendar_id,
+                 ),
                  calendar.make_list_tool(conn),
                  notes.make_tool(conn), messages.make_tool(settings.home),
                  search.make_tool(),

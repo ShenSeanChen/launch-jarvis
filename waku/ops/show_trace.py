@@ -125,7 +125,9 @@ def render_recent_days(
     for offset in range(days - 1, -1, -1):
         day = end - timedelta(days=offset)
         label = day.isoformat()
-        events += _render_trace_section(label, traces / f"{label}.jsonl", console)
+        path = traces / f"{label}.jsonl"
+        if path.exists():
+            events += _render_trace_section(label, path, console)
     return events
 
 

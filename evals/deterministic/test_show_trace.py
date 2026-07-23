@@ -62,7 +62,7 @@ def test_missing_trace_is_reported_without_error(tmp_path):
     assert "No trace file found" in console.export_text()
 
 
-def test_recent_days_render_with_separator_for_missing_day(tmp_path):
+def test_recent_days_skips_missing_days(tmp_path):
     traces = tmp_path / "traces"
     traces.mkdir()
     (traces / "2026-07-20.jsonl").write_text(
@@ -80,7 +80,7 @@ def test_recent_days_render_with_separator_for_missing_day(tmp_path):
     output = console.export_text()
     assert "=== 2026-07-20 ===" in output
     assert "09:00:00 turn start · Monday" in output
-    assert "=== 2026-07-21 ===" in output
-    assert "No trace file found" in output
+    assert "2026-07-21" not in output
+    assert "No trace file found" not in output
     assert "=== 2026-07-22 ===" in output
     assert "11:00:00 turn start · Wednesday" in output

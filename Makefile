@@ -8,7 +8,7 @@
 # `source .venv/bin/activate` — both work, this is just fewer steps.
 PY := $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python)
 
-.PHONY: run voice telegram brief dashboard trace eval eval-judge gate lint
+.PHONY: run voice telegram discord brief dashboard trace eval eval-judge gate lint
 
 run:            ## chat with Waku in the terminal
 	$(PY) -m waku
@@ -18,6 +18,9 @@ voice:          ## talk to it — push-to-talk, or always-on with WAKU_WAKE_WORD
 
 telegram:       ## phone → laptop (needs TELEGRAM_BOT_TOKEN in .env)
 	$(PY) -m waku telegram
+
+discord:        ## Discord → laptop (needs DISCORD_BOT_TOKEN in .env)
+	$(PY) -m waku discord
 
 brief:          ## morning briefing from calendar + mail + memory
 	$(PY) -m waku brief

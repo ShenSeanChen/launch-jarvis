@@ -33,6 +33,10 @@ tracing = [
 telegram = [
     "python-telegram-bot>=21.0",
 ]
+# Optional gateway: message Waku from Discord
+discord = [
+    "discord.py>=2.4",
+]
 # Optional gateway: talk to your laptop. TTS uses macOS `say` by default;
 # for the neural British voice: pip install kokoro soundfile (pulls torch).
 voice = [

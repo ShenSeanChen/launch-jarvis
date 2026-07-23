@@ -1614,6 +1614,13 @@ def main() -> None:
                 print("Telegram gateway → listening in the background (phone messages land here too)")
         except Exception as exc:  # noqa: BLE001 — never let a gateway block the dashboard
             print(f"(telegram) not started: {exc}")
+        try:
+            from waku.gateway.discord import start_in_background as start_discord
+
+            if start_discord():
+                print("Discord gateway → listening in the background (server messages land here too)")
+        except Exception as exc:  # noqa: BLE001 — never let a gateway block the dashboard
+            print(f"(discord) not started: {exc}")
         print(f"Waku dashboard → http://localhost:{port}  (Ctrl-C to stop)")
         server.serve_forever()
         return

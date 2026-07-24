@@ -1,6 +1,6 @@
 # Filming prompts — copy-paste list
 
-The exact prompts to run in the Compare arena on camera. **Paste each verbatim**
+The exact prompts to run in the Arena on camera. **Paste each verbatim**
 — the arena matches by exact text to score Completion (a typo → it races but
 shows "—" for solved). Turn on **"grade with K3"** to also get the Quality score.
 

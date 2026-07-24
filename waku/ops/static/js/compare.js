@@ -239,10 +239,18 @@ function compareErrorReason(err){
   if (e.includes("not found") || e.includes("no longer available")) return "model id not available";
   return null;
 }
+// "knows to 2026-01" next to the model name — each brain's knowledge cutoff,
+// so a confidently-wrong answer about recent events reads as stale knowledge,
+// not low capability (a model can't know about releases after its cutoff).
+// Server-supplied (MODEL_CUTOFF in dashboard.py); absent = vendor unpublished.
+function cutoffTag(cutoff){
+  return cutoff ? ` <span class="meta" style="font-size:11px;white-space:nowrap"
+    title="knowledge cutoff — this model's world knowledge ends here; it cannot know releases after this date">knows to ${esc(cutoff)}</span>` : "";
+}
 function compareCol(res){
   if (res.error){
     const why = compareErrorReason(res.error);
-    return `<div class="cmp-col err"><div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>
+    return `<div class="cmp-col err"><div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${cutoffTag(res.cutoff)}
       <span class="srcpill apple">error</span></div>
       ${why?`<div class="meta" style="color:var(--bad)"><b>${esc(why)}</b></div>`:""}
       <div class="meta" style="opacity:.7">${esc(res.error)}</div></div>`;
@@ -253,7 +261,7 @@ function compareCol(res){
   const gateBadgeHtml = `<span class="badge ${res.gate&&res.gate.decision==="retrieve"?"retrieve":""}">gate · ${esc(res.gate?res.gate.decision:"…")}</span>`;
   if (res.streaming){
     return `<div class="cmp-col">
-      <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>
+      <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${cutoffTag(res.cutoff)}
         <span class="live-dot"></span></div>
       <div class="cmp-stats">${gateBadgeHtml}</div>
       ${tools?`<div class="stages" style="flex-wrap:wrap">${tools}</div>`:""}
@@ -267,7 +275,7 @@ function compareCol(res){
   // per-card grade button — grade just this card if the referee skipped it (429)
   const gradeBtn = `<a class="reveal cmp-grade1" title="grade this card with the referee" onclick="gradeCard('${esc(res.spec)}')">${res._grading?"grading…":(q&&q.score!=null?"re-grade":"grade")}</a>`;
   return `<div class="cmp-col${c?(c.passed?" solved":" failed"):""}">
-    <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${completionBadge}${qualityBadge}${gradeBtn}</div>
+    <div class="cmp-h"><span class="mm-prov">${esc(res.provider)}</span> <code>${esc(res.model)}</code>${cutoffTag(res.cutoff)}${completionBadge}${qualityBadge}${gradeBtn}</div>
     <div class="cmp-stats">
       ${gateBadgeHtml}
       <span class="chip ${compareState.sortBy==="latency"?"sorted":""}">${secs(res.latency_ms)}</span>
@@ -384,7 +392,7 @@ function boardAggregate(){
       const r = (compareState.results || {})[spec];
       if (!r || r.streaming) return;   // column not finished yet
       const a = map[spec] || (map[spec] = {spec, provider: r.provider, model: r.model,
-        runs: 0, ok: 0, total_latency_ms: 0, total_tokens_in: 0, total_tokens_out: 0,
+        cutoff: r.cutoff, runs: 0, ok: 0, total_latency_ms: 0, total_tokens_in: 0, total_tokens_out: 0,
         total_tokens: 0, total_cost_usd: 0, cases_passed: 0, cases_scored: 0,
         _qsum: 0, quality_n: 0, quality_avg: null});
       a.runs += 1;
@@ -479,9 +487,10 @@ function compareHistoryHtml(){
       <a class="reveal" style="margin-left:auto;font-size:12px" onclick="clearCompareHistory()">clear all</a></h2>
     ${costQualityScatter(agg)}
     <div class="card" style="padding:4px 8px"><table>
-      <tr><th>model</th>${th("cases_passed","solved")}<th class="cmp-th ${bs.key==="quality_avg"?"on":""}" onclick="setBoardSort('quality_avg')" title="referee's mean 0-10 grade on the replies (correctness, honesty, concision) — referee is not a racing model">grade${arrow("quality_avg")}</th>${th("runs","races")}<th>ok</th>${th("total_latency_ms","total time")}${th("total_tokens_in","in tok")}${th("total_tokens_out","out tok")}${th("total_tokens","total tok")}<th title="list price per million tokens, input / output">rate $/M</th>${th("total_cost_usd","total cost")}</tr>
+      <tr><th>model</th><th title="knowledge cutoff — when each model's world knowledge ends; it cannot know releases after this date">cutoff</th>${th("cases_passed","solved")}<th class="cmp-th ${bs.key==="quality_avg"?"on":""}" onclick="setBoardSort('quality_avg')" title="referee's mean 0-10 grade on the replies (correctness, honesty, concision) — referee is not a racing model">grade${arrow("quality_avg")}</th>${th("runs","races")}<th>ok</th>${th("total_latency_ms","total time")}${th("total_tokens_in","in tok")}${th("total_tokens_out","out tok")}${th("total_tokens","total tok")}<th title="list price per million tokens, input / output">rate $/M</th>${th("total_cost_usd","total cost")}</tr>
       ${rows.map(a=>`<tr>
         <td><span class="mm-prov">${esc(a.provider)}</span> <code>${esc(a.model)}</code></td>
+        <td class="meta">${a.cutoff?esc(a.cutoff):"—"}</td>
         <td>${a.cases_scored?`<span class="cmp-score ${a.cases_passed===a.cases_scored?"pass":(a.cases_passed?"part":"fail")}">${a.cases_passed}/${a.cases_scored}</span>`:'<span class="meta">—</span>'}</td>
         <td>${a.quality_avg!=null?`<span class="cmp-q ${a.quality_avg>=7?"hi":a.quality_avg>=4?"mid":"lo"}">${a.quality_avg}</span>`:'<span class="meta">—</span>'}</td>
         <td class="meta">${a.runs}</td><td class="meta">${a.ok}/${a.runs}</td>

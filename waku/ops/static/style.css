@@ -376,3 +376,11 @@
        border:1px solid var(--line2);border-radius:99px;padding:3px 12px}
   .cmp-sortbtn:hover{border-color:var(--accent);color:var(--accent)}
   .cmp-sortbtn.on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);font-weight:600}
+
+/* Sub-agent mini-terminal (Arena cards): pi working live inside a card —
+   a window into the contractor, not a full log. */
+.subterm{ margin:6px 0; padding:6px 8px; border:1px solid var(--line2);
+  border-radius:8px; background:var(--bg2); }
+.subterm.live{ border-color: var(--accent); }
+.subterm pre{ margin:0; font-size:11px; line-height:1.45; white-space:pre-wrap;
+  word-break:break-word; max-height:110px; overflow-y:auto; }

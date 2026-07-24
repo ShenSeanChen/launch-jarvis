@@ -209,7 +209,17 @@ async function runCompare(){
         if (ev.kind === "start"){ R[s] = {spec:s, provider:ev.provider, model:ev.model, streaming:true, tools:[], gate:null}; render(); }
         else if (ev.kind === "gate" && R[s]){ R[s].gate = {decision:ev.decision, reason:ev.reason}; render(); }
         else if (ev.kind === "tool" && R[s]){ (R[s].tools = R[s].tools||[]).push({tool:ev.tool}); render(); }
-        else if (ev.kind === "result" && s){ R[s] = ev; saveCompare(); render(); }
+        // The sub-agent (pi) streams its own events through delegate_task —
+        // accumulate them per card so the contractor's work is watchable live
+        // instead of a black box that returns a summary.
+        else if (ev.kind === "subagent" && R[s]){
+          const sub = R[s].sub = R[s].sub || {text:"", tools:[], tokens_in:0, tokens_out:0};
+          if (ev.type === "text" && ev.delta) sub.text = (sub.text + ev.delta).slice(-4000);
+          else if (ev.type === "tool") sub.tools.push(ev.tool);
+          else if (ev.type === "turn_end"){ sub.tokens_in = ev.tokens_in||0; sub.tokens_out = ev.tokens_out||0; }
+          render();
+        }
+        else if (ev.kind === "result" && s){ const sub = R[s] && R[s].sub; R[s] = ev; if (sub) R[s].sub = sub; saveCompare(); render(); }
         else if (ev.kind === "grading"){ compareState.grading = ev; render(); }   // post-race referee pass begins
         else if (ev.kind === "grade" && R[s]){ R[s].quality = ev.quality; if (compareState.grading) compareState.grading.done = (compareState.grading.done||0)+1; saveCompare(); render(); }
         else if (ev.kind === "done"){ compareState.grading = null; if (ev.error) compareState.raceError = ev.error; }
@@ -247,6 +257,19 @@ function cutoffTag(cutoff){
   return cutoff ? ` <span class="meta" style="font-size:11px;white-space:nowrap"
     title="knowledge cutoff — this model's world knowledge ends here; it cannot know releases after this date">knows to ${esc(cutoff)}</span>` : "";
 }
+// The sub-agent's mini-terminal: pi working live inside this card. Last few
+// lines only — it's a window, not a log (the full stream is saved next to the
+// workspace as pi-transcript-events.jsonl).
+function subPane(sub, live){
+  const tail = (sub.text||"").split("\n").filter(Boolean).slice(-6).map(esc).join("\n");
+  const toolChips = (sub.tools||[]).slice(-8).map(t => `<span class="badge">pi · ${esc(t)}</span>`).join(" ");
+  const spend = sub.tokens_in ? `<span class="meta" style="font-size:11px">${sub.tokens_in}↑ ${sub.tokens_out}↓ tokens (on this card's ledger)</span>` : "";
+  return `<div class="subterm${live?" live":""}">
+    <div class="meta" style="font-size:11px;margin-bottom:3px">sub-agent · pi ${spend}</div>
+    ${toolChips?`<div class="stages" style="flex-wrap:wrap;margin-bottom:4px">${toolChips}</div>`:""}
+    ${tail?`<pre>${tail}</pre>`:`<pre class="meta">spawning…</pre>`}
+  </div>`;
+}
 function compareCol(res){
   if (res.error){
     const why = compareErrorReason(res.error);
@@ -265,6 +288,7 @@ function compareCol(res){
         <span class="live-dot"></span></div>
       <div class="cmp-stats">${gateBadgeHtml}</div>
       ${tools?`<div class="stages" style="flex-wrap:wrap">${tools}</div>`:""}
+      ${res.sub?subPane(res.sub, true):""}
       <div class="meta">${(res.tools||[]).length?"running tools…":"thinking…"} <span class="caret"></span></div>
     </div>`;
   }
@@ -284,6 +308,7 @@ function compareCol(res){
       <span class="chip ${compareState.sortBy==="tokens"?"sorted":""}">${(res.tokens_in||0)+(res.tokens_out||0)} tok</span>
     </div>
     ${tools?`<div class="stages" style="flex-wrap:wrap">${tools}</div>`:""}
+    ${res.sub?subPane(res.sub, false):""}
     <div class="r cmp-reply">${renderMarkdown(res.reply||"")}</div>
   </div>`;
 }

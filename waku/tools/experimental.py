@@ -37,7 +37,7 @@ import shutil
 import subprocess
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from waku.config import Settings
@@ -68,7 +68,7 @@ def _record_subagent_usage(settings: Settings, tin: int, tout: int) -> None:
     derived). kind="subagent" so the ledger stays auditable line by line."""
     if not (tin or tout):
         return
-    record = {"ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+    record = {"ts": datetime.now(UTC).isoformat(timespec="milliseconds"),
               "provider": settings.provider, "model": settings.model or "",
               "kind": "subagent", "in": tin, "out": tout}
     path = settings.home / "usage.jsonl"

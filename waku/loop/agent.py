@@ -17,8 +17,9 @@ End-loop guardrails (the orange box's exit conditions):
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 import anthropic
 

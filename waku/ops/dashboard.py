@@ -24,13 +24,14 @@ import json
 import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from waku.config import load_settings
 from waku.db import connect
-from waku.ops import compare_history, judge as judge_mod, scoring
+from waku.ops import compare_history, scoring
+from waku.ops import judge as judge_mod
 from waku.ops.tracing import TraceEncodingError, iter_trace_lines
 
 PORT = 7777
@@ -79,8 +80,8 @@ def _resume_or_new_session(conn) -> str:
     ).fetchone()
     if row and row["last_at"]:
         try:
-            last = datetime.strptime(row["last_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-            if idle_min <= 0 or (datetime.now(timezone.utc) - last).total_seconds() <= idle_min * 60:
+            last = datetime.strptime(row["last_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
+            if idle_min <= 0 or (datetime.now(UTC) - last).total_seconds() <= idle_min * 60:
                 return row["session_id"]
         except ValueError:
             pass
@@ -118,10 +119,10 @@ def _maybe_rotate_session(agent) -> None:
     if not row or not row[0]:
         return
     try:  # sqlite datetime('now') is UTC "YYYY-MM-DD HH:MM:SS"
-        last = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        last = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
     except ValueError:
         return
-    if (datetime.now(timezone.utc) - last).total_seconds() > idle_min * 60:
+    if (datetime.now(UTC) - last).total_seconds() > idle_min * 60:
         agent.session.start_new(datetime.now().strftime("dashboard-%Y%m%d-%H%M%S"))
 
 
@@ -133,10 +134,10 @@ def chat(message: str) -> dict:
     with _agent_lock:
         agent = _get_agent()
         _maybe_rotate_session(agent)
-        start = datetime.now(timezone.utc)
+        start = datetime.now(UTC)
         result = agent.respond(message, observer=lambda kind, ev: events.append({"kind": kind, **ev}),
                                source="dashboard")
-        latency_ms = int((datetime.now(timezone.utc) - start).total_seconds() * 1000)
+        latency_ms = int((datetime.now(UTC) - start).total_seconds() * 1000)
 
     gate = next((e for e in events if e["kind"] == "gate"), None)
     cons = next((e for e in events if e["kind"] == "consolidation"), None)
@@ -169,9 +170,9 @@ def chat_stream(message: str, emit) -> None:
     with _agent_lock:
         agent = _get_agent()
         _maybe_rotate_session(agent)
-        start = datetime.now(timezone.utc)
+        start = datetime.now(UTC)
         result = agent.respond(message, observer=observer, source="dashboard", stream=True)
-        latency_ms = int((datetime.now(timezone.utc) - start).total_seconds() * 1000)
+        latency_ms = int((datetime.now(UTC) - start).total_seconds() * 1000)
 
     gate = next((e for e in events if e["kind"] == "gate"), None)
     cons = next((e for e in events if e["kind"] == "consolidation"), None)
@@ -691,8 +692,8 @@ def collect() -> dict:
     def pct(p: float) -> int:
         return latencies[min(len(latencies) - 1, int(len(latencies) * p))] if latencies else 0
 
-    from waku.memory.procedural.loader import SkillLoader
     from waku.memory import REPO_SKILLS
+    from waku.memory.procedural.loader import SkillLoader
 
     skills = [{"name": s.name, "description": s.description, "body": s.body,
                "path": str(s.path),
@@ -743,7 +744,7 @@ def collect() -> dict:
     }
 
     return {
-        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "home": str(home.resolve()),
         "provider": settings.provider,
         "model": settings_info()["model"],
@@ -923,7 +924,7 @@ def run_query(payload: dict) -> dict:
     if not sql:
         return {"error": "Type a SELECT query."}
     low = sql.lower()
-    if not (low.startswith("select") or low.startswith("with")):
+    if not (low.startswith(("select", "with"))):
         return {"error": "Only SELECT (or WITH … SELECT) queries are allowed."}
     if ";" in sql:
         return {"error": "One statement at a time (no semicolons)."}
@@ -968,9 +969,8 @@ def transcribe_audio(raw: bytes) -> dict:
             _whisper = WhisperModel(os.getenv("WAKU_WHISPER_MODEL", "base"), compute_type="int8")
     # the browser sends WAV (PCM) — Whisper/PyAV decode it reliably (WebM/Opus
     # from MediaRecorder often fails to decode).
-    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    tmp.write(raw)
-    tmp.close()
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp.write(raw)
     try:
         segments, _ = _whisper.transcribe(tmp.name)
         return {"text": " ".join(s.text for s in segments).strip()}
@@ -1490,7 +1490,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_GET(self):  # noqa: N802 — http.server API
+    def do_GET(self):
         if self.path == "/api/data":
             self._send(json.dumps(collect(), default=str).encode(), "application/json")
         elif self.path == "/api/compare/history":
@@ -1528,7 +1528,7 @@ class Handler(BaseHTTPRequestHandler):
                  ".html": "text/html; charset=utf-8"}.get(target.suffix, "application/octet-stream")
         self._send(target.read_bytes(), ctype, no_cache=True)
 
-    def do_POST(self):  # noqa: N802 — local write endpoints
+    def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         # /api/voice takes a raw audio blob, not JSON — handle it first.
         if self.path == "/api/voice":
@@ -1620,7 +1620,7 @@ def main() -> None:
 
             if start_in_background():
                 print("Telegram gateway → listening in the background (phone messages land here too)")
-        except Exception as exc:  # noqa: BLE001 — never let a gateway block the dashboard
+        except Exception as exc:
             print(f"(telegram) not started: {exc}")
         print(f"Waku dashboard → http://localhost:{port}  (Ctrl-C to stop)")
         server.serve_forever()

@@ -10,12 +10,11 @@ from __future__ import annotations
 import subprocess
 from types import SimpleNamespace
 
+import pytest
+
 from evals.helpers import ScriptedClient, make_waku, response, text_block, tool_block
 from waku.config import Settings
 from waku.tools import experimental
-
-
-import pytest
 
 
 @pytest.fixture(autouse=True)

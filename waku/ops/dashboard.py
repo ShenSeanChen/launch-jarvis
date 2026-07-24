@@ -227,7 +227,8 @@ def _compare_one(message: str, spec: str) -> dict:
                 "gate": (gate or None), "iterations": result.iterations, "latency_ms": ms,
                 "tools": [{"tool": c["tool"]} for c in result.tool_calls],
                 "tokens_in": tin, "tokens_out": tout,
-                "cost_usd": round(tin / 1e6 * pin + tout / 1e6 * pout, 4)}
+                "cost_usd": round(tin / 1e6 * pin + tout / 1e6 * pout, 4),
+                "cutoff": cutoff_for(settings.model)}
     except (Exception, SystemExit) as exc:   # a broken contestant (incl. a missing
         # key, which get_client raises as SystemExit) fails alone, not the whole race
         return {"spec": spec, "provider": provider, "model": model, "error": str(exc)[:200]}
@@ -284,7 +285,8 @@ def compare_stream(message: str, specs: list, emit, judge: bool = False,
 
     def run(spec):
         provider, _, model = spec.partition(":")
-        send("start", {"spec": spec, "provider": provider, "model": model})
+        send("start", {"spec": spec, "provider": provider, "model": model,
+                       "cutoff": cutoff_for(model)})
         home = Path(tempfile.mkdtemp(prefix=f"compare-{provider}-"))
         gate: dict = {}
 
@@ -347,6 +349,7 @@ def compare_stream(message: str, specs: list, emit, judge: bool = False,
                             "iterations": result.iterations, "latency_ms": ms,
                             "tools": [{"tool": c["tool"]} for c in result.tool_calls],
                             "tokens_in": tin, "tokens_out": tout, "cost_usd": cost,
+                            "cutoff": cutoff_for(settings.model),
                             "completion": completion, "quality": None})
         except (Exception, SystemExit) as exc:
             # SystemExit (not an Exception subclass) is what get_client raises for
@@ -395,10 +398,13 @@ def compare_clear(payload: dict) -> dict:
 
 def _compare_history_response(runs: list[dict]) -> dict:
     """Reprice each stored result from its tokens with the CURRENT price table (so
-    a pricing fix corrects past races), aggregate, and tag each row with the rate.
-    The shared shape returned by /api/compare/history and the re-grade endpoint."""
+    a pricing fix corrects past races), aggregate, and tag each row with the rate
+    and knowledge cutoff (also from the current table, so a cutoff fix corrects
+    past races too). The shared shape returned by /api/compare/history and the
+    re-grade endpoint."""
     for run in runs:
         for r in run.get("results", []):
+            r["cutoff"] = cutoff_for(r.get("model", ""))
             if r.get("error"):
                 continue
             pin, pout = price_for(r.get("provider", ""), r.get("model", ""))
@@ -407,6 +413,7 @@ def _compare_history_response(runs: list[dict]) -> dict:
     agg = compare_history.aggregate(runs)
     for row in agg:
         row["rate_in"], row["rate_out"] = price_for(row["provider"], row["model"])
+        row["cutoff"] = cutoff_for(row["model"])
     return {"runs": runs[-20:][::-1], "aggregate": agg}
 
 
@@ -493,6 +500,42 @@ MODEL_PRICING = {
     "grok-4.5": (2.0, 6.0),
     "grok-4.3": (1.25, 2.5),
 }
+
+
+# Knowledge cutoff (YYYY-MM) per model — the arena discloses when each brain's
+# world knowledge ends, so stale knowledge isn't misread as low capability
+# (gemini-3.1-pro will confidently deny that 2026 models exist: its cutoff is
+# 2025-01, a year before them). Values are each vendor's published knowledge
+# cutoff (for Anthropic, the "reliable knowledge cutoff"; training data runs
+# later). None = the vendor hasn't published one. Fact-checked Jul 2026 against
+# vendor model cards/docs. Every MODEL_PRICING id must have an entry here —
+# enforced by evals/deterministic/test_providers.py.
+MODEL_CUTOFF = {
+    # Anthropic — support.claude.com "How up-to-date is Claude's training data?"
+    "claude-opus-4-8": "2026-01",
+    "claude-fable-5": "2026-01",
+    "claude-sonnet-5": "2026-01",
+    "claude-haiku-4-5-20251001": "2025-02",   # trained on data through 2025-07
+    # OpenAI — developers.openai.com model pages
+    "gpt-5.6-sol": "2026-02",
+    "gpt-5.3-chat-latest": "2025-08",
+    # Google Gemini — deepmind.google model cards / ai.google.dev
+    "gemini-3.1-pro-preview": "2025-01",
+    "gemini-3.5-flash": "2025-01",
+    # Moonshot Kimi — K3 reported "early 2026"; K2.7 cutoffs unpublished
+    "kimi-k3": "2026-01",
+    "kimi-k2.7-code-highspeed": None,
+    "kimi-k2.7": None,
+    # xAI Grok — docs.x.ai model list
+    "grok-4.5": "2026-02",
+    "grok-4.3": "2025-12",
+}
+
+
+def cutoff_for(model: str) -> str | None:
+    """Knowledge-cutoff date ('YYYY-MM') for a model id, or None when the
+    vendor hasn't published one (the UI shows a dash rather than a guess)."""
+    return MODEL_CUTOFF.get(model)
 
 
 def price_for(provider: str, model: str) -> tuple[float, float]:

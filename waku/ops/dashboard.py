@@ -298,6 +298,14 @@ def compare_stream(message: str, specs: list, emit, judge: bool = False,
                 send("gate", {"spec": spec, "decision": ev.get("decision"), "reason": ev.get("reason")})
             elif kind == "tool":
                 send("tool", {"spec": spec, "tool": ev.get("tool")})
+            elif kind == "subagent":
+                # delegate_task relays pi's live event stream (see experimental.py)
+                # — forward it so the card can show the sub-agent working instead
+                # of a black box. Text deltas are trimmed; this is a peek, not a log.
+                out = {"spec": spec, **ev}
+                if out.get("type") == "text" and len(out.get("delta", "")) > 200:
+                    out["delta"] = out["delta"][:200]
+                send("subagent", out)
 
         try:
             # coding mode registers delegate_task (the pi sub-agent) so the loop

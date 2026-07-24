@@ -99,7 +99,7 @@ def run_loop(
         # ---- act: execute each requested tool; observe: feed results back
         tool_results = []
         for call in tool_uses:
-            output = tools.execute(call.name, call.input)
+            output = tools.execute(call.name, call.input, notify=notify)
             event = {"tool": call.name, "args": call.input, "output": output}
             result.tool_calls.append(event)
             notify("tool", event)
